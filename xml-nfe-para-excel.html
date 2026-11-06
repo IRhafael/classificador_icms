@@ -1,0 +1,1318 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XML de notas fiscais para Excel</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #F7F9F8;
+    --panel: #FFFFFF;
+    --ink: #17211C;
+    --muted: #56655D;
+    --line: #D3DBD6;
+    --accent: #1D6F42;
+    --accent-ink: #FFFFFF;
+    --accent-soft: #E3F1E9;
+    --grid: rgba(29, 111, 66, .13);
+    --warn: #8A5300;
+    --err: #B3261E;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0F1512;
+      --panel: #17201B;
+      --ink: #E7EFEA;
+      --muted: #93A59B;
+      --line: #2A3831;
+      --accent: #3DB37A;
+      --accent-ink: #06170E;
+      --accent-soft: #16291F;
+      --grid: rgba(61, 179, 122, .16);
+      --warn: #E0A94A;
+      --err: #F2887F;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 44px 20px 90px; }
+  h1 {
+    font: 700 clamp(1.8rem, 4.2vw, 2.6rem)/1.12 "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    letter-spacing: -.01em;
+    margin: 0 0 12px;
+  }
+  h2 {
+    font: 700 1.35rem/1.2 "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    margin: 0 0 14px;
+  }
+  .lead { color: var(--muted); max-width: 64ch; margin: 0 0 30px; }
+
+  /* Área de arraste: parece uma planilha vazia, com a "célula selecionada" no centro */
+  .drop {
+    border: 1px solid var(--line);
+    background-color: var(--panel);
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 120px 36px;
+    padding: 56px 16px;
+    display: grid;
+    place-items: center;
+    transition: background-color .15s, border-color .15s;
+  }
+  .drop.over { background-color: var(--accent-soft); border-color: var(--accent); }
+  .cell {
+    position: relative;
+    background: var(--panel);
+    border: 2px solid var(--accent);
+    padding: 24px 28px;
+    text-align: center;
+    max-width: 480px;
+  }
+  .cell::after {
+    content: "";
+    position: absolute;
+    right: -6px; bottom: -6px;
+    width: 9px; height: 9px;
+    background: var(--accent);
+    border: 1px solid var(--panel);
+  }
+  .cell p { margin: 0 0 16px; font-weight: 600; }
+  .cell .hint { margin: 14px 0 0; font-weight: 400; color: var(--muted); font-size: .9rem; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+
+  button {
+    font: inherit;
+    cursor: pointer;
+    border-radius: 4px;
+    padding: 9px 16px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--ink);
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-ink);
+    font-weight: 600;
+    padding: 12px 22px;
+  }
+  button.link { border: 0; background: none; color: var(--accent); padding: 4px 6px; text-decoration: underline; }
+  :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+  .queue {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+    gap: 8px; margin: 18px 0 6px; min-height: 30px;
+  }
+  .queue .muted { color: var(--muted); font-size: .92rem; }
+  .options { display: flex; flex-wrap: wrap; gap: 8px 26px; margin: 10px 0 24px; }
+  .options label { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+  input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); }
+
+  .progress { margin-top: 26px; }
+  progress { width: 100%; height: 12px; accent-color: var(--accent); }
+  .progress p { margin: 8px 0 0; color: var(--muted); font-size: .92rem; font-variant-numeric: tabular-nums; }
+
+  .result { margin-top: 34px; border-top: 2px solid var(--ink); padding-top: 22px; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  table.kv td { padding: 7px 0; border-bottom: 1px solid var(--line); }
+  table.kv td:last-child { text-align: right; font-weight: 600; }
+  .scroll { overflow-x: auto; margin-top: 8px; }
+  table.prev { font-size: .88rem; min-width: 640px; }
+  table.prev th { text-align: left; font-weight: 600; color: var(--muted); padding: 6px 10px 6px 0; border-bottom: 1px solid var(--ink); }
+  table.prev td { padding: 6px 10px 6px 0; border-bottom: 1px solid var(--line); white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+  table.prev td.r, table.prev th.r { text-align: right; padding-right: 0; }
+  .dl { margin: 26px 0 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+  .note { color: var(--muted); font-size: .9rem; margin: 6px 0; }
+  .warn { color: var(--warn); }
+  .err { color: var(--err); }
+  details { margin-top: 18px; }
+  summary { cursor: pointer; font-weight: 600; }
+  details ul { margin: 10px 0 0; padding-left: 20px; font-size: .88rem; color: var(--muted); word-break: break-word; }
+  footer { margin-top: 60px; color: var(--muted); font-size: .85rem; max-width: 70ch; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>XML de notas fiscais para Excel</h1>
+  <p class="lead">Leia NF-e (modelo 55) e NFC-e (modelo 65) em lote e gere uma planilha .xlsx com o resumo das notas e o detalhamento item a item, com todos os tributos. Tudo acontece neste navegador, sem internet: nenhum arquivo sai do seu computador.</p>
+
+  <section id="drop" class="drop" aria-label="Área para soltar arquivos">
+    <div class="cell">
+      <p>Solte aqui os XML, ZIPs ou uma pasta inteira</p>
+      <div class="row">
+        <button type="button" id="btnFiles">Escolher arquivos</button>
+        <button type="button" id="btnFolder">Escolher pasta</button>
+      </div>
+      <p class="hint">Aceita .xml e .zip. Pastas são lidas com todas as subpastas.</p>
+    </div>
+  </section>
+  <input type="file" id="inFiles" multiple accept=".xml,.zip,application/xml,text/xml,application/zip" hidden>
+  <input type="file" id="inFolder" webkitdirectory multiple hidden>
+
+  <div class="queue" aria-live="polite">
+    <span id="queueInfo" class="muted">Nenhum arquivo selecionado.</span>
+    <button type="button" id="btnClear" class="link" hidden>Limpar lista</button>
+  </div>
+
+  <p class="note">A planilha sai com duas abas: <strong>Resumo</strong> (uma linha por nota) e <strong>Itens</strong> (uma linha por item, com o detalhamento completo dos tributos).</p>
+
+  <button type="button" id="btnRun" class="primary" disabled>Gerar Excel</button>
+
+  <div id="progress" class="progress" hidden>
+    <progress id="bar" value="0" max="100"></progress>
+    <p id="progressText" aria-live="polite"></p>
+  </div>
+
+  <section id="result" class="result" hidden aria-live="polite"></section>
+
+  <footer>
+    Notas repetidas (mesma chave de acesso) são lidas uma única vez. Eventos de cancelamento marcam a nota como cancelada. Arquivos que não são NF-e/NFC-e, ou que estão corrompidos, aparecem na aba “Ignorados”. As abas de eventos e ignorados só aparecem quando há algo a mostrar.
+  </footer>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+/* =====================================================================
+ *  Utilidades de leitura de XML (independentes de namespace)
+ * ===================================================================== */
+function kid(el, name) {
+  if (!el) return null;
+  for (let c = el.firstElementChild; c; c = c.nextElementSibling) {
+    if (c.localName === name) return c;
+  }
+  return null;
+}
+function kids(el, name) {
+  const out = [];
+  if (!el) return out;
+  for (let c = el.firstElementChild; c; c = c.nextElementSibling) {
+    if (c.localName === name) out.push(c);
+  }
+  return out;
+}
+const first = el => (el ? el.firstElementChild : null);
+function at(el, path) {
+  let cur = el;
+  for (const p of path.split('/')) {
+    cur = kid(cur, p);
+    if (!cur) return '';
+  }
+  return (cur.textContent || '').trim();
+}
+const num = s => {
+  if (s === '' || s == null) return '';
+  const v = parseFloat(s);
+  return Number.isFinite(v) ? v : '';
+};
+// "2024-05-10T14:30:00-03:00" -> número de série do Excel (hora local, como escrita na nota)
+function toSerial(s) {
+  if (!s) return '';
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+  if (!m) return '';
+  const ms = Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0));
+  return Math.round((ms / 86400000 + 25569) * 1e8) / 1e8;
+}
+
+const FORMAS_PAG = {
+  '01': 'Dinheiro', '02': 'Cheque', '03': 'Cartão de crédito', '04': 'Cartão de débito',
+  '05': 'Crédito loja', '10': 'Vale alimentação', '11': 'Vale refeição', '12': 'Vale presente',
+  '13': 'Vale combustível', '14': 'Duplicata mercantil', '15': 'Boleto bancário',
+  '16': 'Depósito bancário', '17': 'PIX', '18': 'Transferência / carteira digital',
+  '19': 'Programa de fidelidade', '20': 'PIX estático', '90': 'Sem pagamento', '99': 'Outros'
+};
+const EVENTOS = {
+  '110111': 'Cancelamento', '110112': 'Cancelamento por substituição', '110110': 'Carta de correção',
+  '210200': 'Confirmação da operação', '210210': 'Ciência da operação',
+  '210220': 'Desconhecimento da operação', '210240': 'Operação não realizada'
+};
+
+/* =====================================================================
+ *  Definição das abas / colunas
+ *  t: s = texto, n = número, m = moeda, q = quantidade, d = data e hora
+ * ===================================================================== */
+const COLS_NOTAS = [
+  { k: 'tipo', h: 'Tipo', t: 's', w: 9 },
+  { k: 'modelo', h: 'Modelo', t: 's', w: 9 },
+  { k: 'serie', h: 'Série', t: 'n', w: 8 },
+  { k: 'numero', h: 'Número', t: 'n', w: 11 },
+  { k: 'emissao', h: 'Data de emissão', t: 'd' },
+  { k: 'situacao', h: 'Situação', t: 's', w: 15 },
+  { k: 'operacao', h: 'Operação', t: 's', w: 10 },
+  { k: 'natOp', h: 'Natureza da operação', t: 's', w: 28 },
+  { k: 'emitDoc', h: 'CNPJ/CPF emitente', t: 's', w: 20 },
+  { k: 'emitNome', h: 'Emitente', t: 's', w: 34 },
+  { k: 'emitUF', h: 'UF emitente', t: 's', w: 8 },
+  { k: 'destDoc', h: 'CNPJ/CPF destinatário', t: 's', w: 22 },
+  { k: 'destNome', h: 'Destinatário', t: 's', w: 34 },
+  { k: 'destUF', h: 'UF destinatário', t: 's', w: 10 },
+  { k: 'vProd', h: 'Total dos produtos', t: 'm' },
+  { k: 'vDesc', h: 'Desconto', t: 'm' },
+  { k: 'vFrete', h: 'Frete', t: 'm' },
+  { k: 'vSeg', h: 'Seguro', t: 'm' },
+  { k: 'vOutro', h: 'Outras despesas', t: 'm' },
+  { k: 'vBC', h: 'Base de cálculo ICMS', t: 'm', w: 16 },
+  { k: 'vICMS', h: 'ICMS', t: 'm' },
+  { k: 'vST', h: 'ICMS ST', t: 'm' },
+  { k: 'vIPI', h: 'IPI', t: 'm' },
+  { k: 'vPIS', h: 'PIS', t: 'm' },
+  { k: 'vCOFINS', h: 'COFINS', t: 'm' },
+  { k: 'vNF', h: 'Total da nota', t: 'm', w: 15 },
+  { k: 'chave', h: 'Chave de acesso', t: 's', w: 48 },
+  { k: 'nProt', h: 'Protocolo', t: 's', w: 18 },
+  { k: 'dhProt', h: 'Data da autorização', t: 'd' },
+  { k: 'statusSefaz', h: 'Retorno da SEFAZ', t: 's', w: 34 },
+  { k: 'ambiente', h: 'Ambiente', t: 's', w: 13 },
+  { k: 'infCpl', h: 'Informações complementares', t: 's', w: 50 },
+  { k: 'arquivo', h: 'Arquivo', t: 's', w: 40 }
+];
+// s:1 = coluna presente também no modo simples; as demais só entram no detalhamento de tributos
+const COLS_ITENS_FULL = [
+  { k: 'tipo', h: 'Tipo', t: 's', w: 9, s: 1 },
+  { k: 'serie', h: 'Série', t: 'n', w: 8, s: 1 },
+  { k: 'numero', h: 'Número da nota', t: 'n', w: 14, s: 1 },
+  { k: 'emissao', h: 'Data de emissão', t: 'd', s: 1 },
+  { k: 'emitDoc', h: 'CNPJ/CPF emitente', t: 's', w: 20, s: 1 },
+  { k: 'emitNome', h: 'Emitente', t: 's', w: 30, s: 1 },
+  { k: 'item', h: 'Item', t: 'n', w: 6, s: 1 },
+  { k: 'cProd', h: 'Código do produto', t: 's', w: 16, s: 1 },
+  { k: 'ean', h: 'EAN / GTIN', t: 's', w: 16, s: 1 },
+  { k: 'desc', h: 'Descrição', t: 's', w: 44, s: 1 },
+  { k: 'ncm', h: 'NCM', t: 's', w: 11, s: 1 },
+  { k: 'cest', h: 'CEST', t: 's', w: 10, s: 1 },
+  { k: 'cfop', h: 'CFOP', t: 's', w: 8, s: 1 },
+  { k: 'un', h: 'Unidade', t: 's', w: 9, s: 1 },
+  { k: 'qtd', h: 'Quantidade', t: 'q', s: 1 },
+  { k: 'vUn', h: 'Valor unitário', t: 'q', w: 15, s: 1 },
+  { k: 'vProd', h: 'Valor do item', t: 'm', s: 1 },
+  { k: 'vDesc', h: 'Desconto', t: 'm', s: 1 },
+  { k: 'vFrete', h: 'Frete', t: 'm', s: 1 },
+  { k: 'vOutro', h: 'Outras despesas', t: 'm', s: 1 },
+  { k: 'vSeg', h: 'Seguro', t: 'm' },
+  { k: 'cBenef', h: 'Código de benefício fiscal', t: 's', w: 16 },
+  { k: 'uTrib', h: 'Unidade tributável', t: 's', w: 11 },
+  { k: 'qTrib', h: 'Quantidade tributável', t: 'q', w: 14 },
+  { k: 'vUnTrib', h: 'Valor unitário tributável', t: 'q', w: 16 },
+  { k: 'vTotTrib', h: 'Valor aprox. dos tributos', t: 'm', w: 16 },
+  // ICMS
+  { k: 'orig', h: 'Origem', t: 's', w: 8, s: 1 },
+  { k: 'cstIcms', h: 'CST/CSOSN ICMS', t: 's', w: 15, s: 1 },
+  { k: 'modBC', h: 'ICMS: modalidade da base', t: 's', w: 13 },
+  { k: 'pRedBC', h: 'ICMS: redução da base (%)', t: 'q', w: 14 },
+  { k: 'bcIcms', h: 'Base ICMS', t: 'm', s: 1 },
+  { k: 'aliqIcms', h: 'Alíquota ICMS (%)', t: 'q', w: 16, s: 1 },
+  { k: 'vIcms', h: 'ICMS', t: 'm', s: 1 },
+  { k: 'pDif', h: 'ICMS: diferimento (%)', t: 'q', w: 13 },
+  { k: 'vICMSDif', h: 'ICMS: valor diferido', t: 'm', w: 14 },
+  { k: 'vICMSDeson', h: 'ICMS: valor desonerado', t: 'm', w: 14 },
+  { k: 'motDesICMS', h: 'ICMS: motivo da desoneração', t: 's', w: 14 },
+  { k: 'vBCFCP', h: 'FCP: base', t: 'm' },
+  { k: 'pFCP', h: 'FCP: alíquota (%)', t: 'q', w: 12 },
+  { k: 'vFCP', h: 'FCP: valor', t: 'm' },
+  { k: 'modBCST', h: 'ICMS ST: modalidade da base', t: 's', w: 14 },
+  { k: 'pMVAST', h: 'ICMS ST: MVA (%)', t: 'q', w: 12 },
+  { k: 'pRedBCST', h: 'ICMS ST: redução da base (%)', t: 'q', w: 14 },
+  { k: 'bcIcmsSt', h: 'ICMS ST: base', t: 'm' },
+  { k: 'pICMSST', h: 'ICMS ST: alíquota (%)', t: 'q', w: 13 },
+  { k: 'vIcmsSt', h: 'ICMS ST', t: 'm', s: 1 },
+  { k: 'vBCFCPST', h: 'FCP ST: base', t: 'm' },
+  { k: 'pFCPST', h: 'FCP ST: alíquota (%)', t: 'q', w: 13 },
+  { k: 'vFCPST', h: 'FCP ST: valor', t: 'm' },
+  { k: 'vBCSTRet', h: 'ICMS ST retido: base', t: 'm', w: 14 },
+  { k: 'pST', h: 'ICMS ST retido: alíquota (%)', t: 'q', w: 15 },
+  { k: 'vICMSSubstituto', h: 'ICMS próprio do substituto', t: 'm', w: 15 },
+  { k: 'vICMSSTRet', h: 'ICMS ST retido: valor', t: 'm', w: 14 },
+  { k: 'pCredSN', h: 'Simples: alíquota de crédito (%)', t: 'q', w: 16 },
+  { k: 'vCredICMSSN', h: 'Simples: crédito de ICMS', t: 'm', w: 15 },
+  // IPI
+  { k: 'cEnq', h: 'IPI: código de enquadramento', t: 's', w: 14 },
+  { k: 'cstIpi', h: 'CST IPI', t: 's', w: 9 },
+  { k: 'bcIpi', h: 'Base IPI', t: 'm' },
+  { k: 'pIpi', h: 'Alíquota IPI (%)', t: 'q', w: 13 },
+  { k: 'vIpi', h: 'IPI', t: 'm', s: 1 },
+  // Imposto de importação
+  { k: 'vBCII', h: 'II: base', t: 'm' },
+  { k: 'vII', h: 'II: valor', t: 'm' },
+  // PIS e COFINS
+  { k: 'cstPis', h: 'CST PIS', t: 's', w: 9, s: 1 },
+  { k: 'bcPis', h: 'Base PIS', t: 'm' },
+  { k: 'pPis', h: 'Alíquota PIS (%)', t: 'q', w: 13 },
+  { k: 'vPis', h: 'PIS', t: 'm', s: 1 },
+  { k: 'cstCofins', h: 'CST COFINS', t: 's', w: 12, s: 1 },
+  { k: 'bcCofins', h: 'Base COFINS', t: 'm' },
+  { k: 'pCofins', h: 'Alíquota COFINS (%)', t: 'q', w: 15 },
+  { k: 'vCofins', h: 'COFINS', t: 'm', s: 1 },
+  // ISS (serviços em NF-e)
+  { k: 'bcIssqn', h: 'ISS: base', t: 'm' },
+  { k: 'aliqIssqn', h: 'ISS: alíquota (%)', t: 'q', w: 13 },
+  { k: 'vIssqn', h: 'ISS: valor', t: 'm' },
+  // DIFAL (partilha interestadual, venda a consumidor final)
+  { k: 'vBCUFDest', h: 'DIFAL: base UF destino', t: 'm', w: 14 },
+  { k: 'pFCPUFDest', h: 'DIFAL: alíq. FCP UF destino (%)', t: 'q', w: 16 },
+  { k: 'pICMSUFDest', h: 'DIFAL: alíq. interna UF destino (%)', t: 'q', w: 17 },
+  { k: 'pICMSInter', h: 'DIFAL: alíq. interestadual (%)', t: 'q', w: 16 },
+  { k: 'vFCPUFDest', h: 'DIFAL: FCP UF destino', t: 'm', w: 14 },
+  { k: 'vICMSUFDest', h: 'DIFAL: ICMS UF destino', t: 'm', w: 14 },
+  { k: 'vICMSUFRemet', h: 'DIFAL: ICMS UF origem', t: 'm', w: 14 },
+  // Reforma tributária (IBS e CBS)
+  { k: 'cstIbs', h: 'IBS/CBS: CST', t: 's', w: 11 },
+  { k: 'cClassTrib', h: 'IBS/CBS: cClassTrib', t: 's', w: 13 },
+  { k: 'bcIbs', h: 'IBS/CBS: base', t: 'm' },
+  { k: 'pIBSUF', h: 'IBS UF: alíquota (%)', t: 'q', w: 13 },
+  { k: 'vIBSUF', h: 'IBS UF: valor', t: 'm' },
+  { k: 'pIBSMun', h: 'IBS município: alíquota (%)', t: 'q', w: 15 },
+  { k: 'vIBSMun', h: 'IBS município: valor', t: 'm', w: 14 },
+  { k: 'vIBS', h: 'IBS: valor total', t: 'm' },
+  { k: 'pCBS', h: 'CBS: alíquota (%)', t: 'q', w: 12 },
+  { k: 'vCBS', h: 'CBS: valor', t: 'm' },
+  { k: 'chave', h: 'Chave de acesso', t: 's', w: 48, s: 1 }
+];
+const colsItens = detail => (detail ? COLS_ITENS_FULL : COLS_ITENS_FULL.filter(c => c.s));
+const COLS_RESUMO = [
+  { k: 'emitDoc', h: 'CNPJ/CPF emitente', t: 's', w: 20 },
+  { k: 'emitNome', h: 'Emitente', t: 's', w: 30 },
+  { k: 'cProd', h: 'Código do produto', t: 's', w: 16 },
+  { k: 'ean', h: 'EAN / GTIN', t: 's', w: 16 },
+  { k: 'desc', h: 'Descrição', t: 's', w: 44 },
+  { k: 'ncm', h: 'NCM', t: 's', w: 11 },
+  { k: 'cest', h: 'CEST', t: 's', w: 10 },
+  { k: 'cfop', h: 'CFOP', t: 's', w: 8 },
+  { k: 'un', h: 'Unidade', t: 's', w: 9 },
+  { k: 'cstIcms', h: 'CST/CSOSN ICMS', t: 's', w: 15 },
+  { k: 'aliqIcms', h: 'Alíquota ICMS (%)', t: 'q', w: 16 },
+  { k: 'cstIpi', h: 'CST IPI', t: 's', w: 9 },
+  { k: 'pIpi', h: 'Alíquota IPI (%)', t: 'q', w: 13 },
+  { k: 'cstPis', h: 'CST PIS', t: 's', w: 9 },
+  { k: 'pPis', h: 'Alíquota PIS (%)', t: 'q', w: 13 },
+  { k: 'cstCofins', h: 'CST COFINS', t: 's', w: 12 },
+  { k: 'pCofins', h: 'Alíquota COFINS (%)', t: 'q', w: 15 },
+  { k: 'n', h: 'Ocorrências (itens)', t: 'n', w: 13 },
+  { k: 'qtd', h: 'Quantidade total', t: 'q', w: 14 },
+  { k: 'vProd', h: 'Valor total', t: 'm' },
+  { k: 'vIcms', h: 'ICMS', t: 'm' },
+  { k: 'vIcmsSt', h: 'ICMS ST', t: 'm' },
+  { k: 'vICMSSTRet', h: 'ICMS ST retido anteriormente', t: 'm', w: 17 },
+  { k: 'vIpi', h: 'IPI', t: 'm' },
+  { k: 'vPis', h: 'PIS', t: 'm' },
+  { k: 'vCofins', h: 'COFINS', t: 'm' }
+];
+const COLS_PAG = [
+  { k: 'tipo', h: 'Tipo', t: 's', w: 9 },
+  { k: 'serie', h: 'Série', t: 'n', w: 8 },
+  { k: 'numero', h: 'Número da nota', t: 'n', w: 14 },
+  { k: 'emissao', h: 'Data de emissão', t: 'd' },
+  { k: 'emitNome', h: 'Emitente', t: 's', w: 30 },
+  { k: 'codForma', h: 'Código', t: 's', w: 8 },
+  { k: 'forma', h: 'Forma de pagamento', t: 's', w: 30 },
+  { k: 'valor', h: 'Valor', t: 'm' },
+  { k: 'chave', h: 'Chave de acesso', t: 's', w: 48 }
+];
+const COLS_EVENTOS = [
+  { k: 'chave', h: 'Chave de acesso', t: 's', w: 48 },
+  { k: 'tp', h: 'Código do evento', t: 's', w: 16 },
+  { k: 'desc', h: 'Evento', t: 's', w: 30 },
+  { k: 'seq', h: 'Sequência', t: 'n', w: 11 },
+  { k: 'dh', h: 'Data do evento', t: 'd' },
+  { k: 'nProt', h: 'Protocolo', t: 's', w: 18 },
+  { k: 'status', h: 'Retorno da SEFAZ', t: 's', w: 34 },
+  { k: 'just', h: 'Justificativa', t: 's', w: 40 },
+  { k: 'arquivo', h: 'Arquivo', t: 's', w: 40 }
+];
+const COLS_IGNORADOS = [
+  { k: 'arquivo', h: 'Arquivo', t: 's', w: 60 },
+  { k: 'motivo', h: 'Motivo', t: 's', w: 70 }
+];
+
+/* =====================================================================
+ *  Escritor de XLSX (sem bibliotecas): ZIP sem compressão + XML da planilha
+ * ===================================================================== */
+const enc = new TextEncoder();
+const MAXROWS = 1000000; // limite do Excel: 1.048.575 linhas de dados
+
+const CRC_T = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crcUpdate(c, buf) {
+  for (let i = 0; i < buf.length; i++) c = CRC_T[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+  return c;
+}
+
+async function deflate(chunks) {
+  if (typeof CompressionStream === 'undefined') return null;
+  try {
+    const cs = new Blob(chunks).stream().pipeThrough(new CompressionStream('deflate-raw'));
+    return await new Response(cs).blob();
+  } catch (e) {
+    return null;
+  }
+}
+
+async function makeZip(files) {
+  const parts = [], central = [];
+  let offset = 0;
+  const dt = new Date();
+  const dosTime = (dt.getHours() << 11) | (dt.getMinutes() << 5) | (dt.getSeconds() >> 1);
+  const dosDate = ((dt.getFullYear() - 1980) << 9) | ((dt.getMonth() + 1) << 5) | dt.getDate();
+  for (const f of files) {
+    const name = enc.encode(f.name);
+    let c = 0xFFFFFFFF, size = 0;
+    for (const ch of f.chunks) { c = crcUpdate(c, ch); size += ch.length; }
+    const crc = (c ^ 0xFFFFFFFF) >>> 0;
+    const comp = size > 0 ? await deflate(f.chunks) : null;
+    const method = comp ? 8 : 0;
+    const csize = comp ? comp.size : size;
+
+    const lh = new DataView(new ArrayBuffer(30));
+    lh.setUint32(0, 0x04034b50, true);
+    lh.setUint16(4, 20, true);
+    lh.setUint16(6, 0x0800, true);
+    lh.setUint16(8, method, true);
+    lh.setUint16(10, dosTime, true);
+    lh.setUint16(12, dosDate, true);
+    lh.setUint32(14, crc, true);
+    lh.setUint32(18, csize, true);
+    lh.setUint32(22, size, true);
+    lh.setUint16(26, name.length, true);
+    lh.setUint16(28, 0, true);
+    parts.push(lh.buffer, name);
+    if (comp) parts.push(comp); else parts.push(...f.chunks);
+
+    const ch = new DataView(new ArrayBuffer(46));
+    ch.setUint32(0, 0x02014b50, true);
+    ch.setUint16(4, 20, true);
+    ch.setUint16(6, 20, true);
+    ch.setUint16(8, 0x0800, true);
+    ch.setUint16(10, method, true);
+    ch.setUint16(12, dosTime, true);
+    ch.setUint16(14, dosDate, true);
+    ch.setUint32(16, crc, true);
+    ch.setUint32(20, csize, true);
+    ch.setUint32(24, size, true);
+    ch.setUint16(28, name.length, true);
+    ch.setUint32(42, offset, true);
+    central.push(ch.buffer, name);
+    offset += 30 + name.length + csize;
+  }
+  let cdSize = 0;
+  for (const p of central) cdSize += p.byteLength;
+  const eo = new DataView(new ArrayBuffer(22));
+  eo.setUint32(0, 0x06054b50, true);
+  eo.setUint16(8, files.length, true);
+  eo.setUint16(10, files.length, true);
+  eo.setUint32(12, cdSize, true);
+  eo.setUint32(16, offset, true);
+  return new Blob([...parts, ...central, eo.buffer],
+    { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+function colName(i) {
+  let s = '';
+  i++;
+  while (i > 0) {
+    const m = (i - 1) % 26;
+    s = String.fromCharCode(65 + m) + s;
+    i = Math.floor((i - 1) / 26);
+  }
+  return s;
+}
+const ILLEGAL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g;
+const esc = s => s.replace(ILLEGAL, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const STYLE_OF = { m: 2, d: 3, q: 4 };
+
+function cellXml(ref, v, t) {
+  if (v === '' || v === null || v === undefined) return '';
+  if (t !== 's' && typeof v === 'number' && Number.isFinite(v)) {
+    const st = STYLE_OF[t];
+    return '<c r="' + ref + '"' + (st ? ' s="' + st + '"' : '') + '><v>' + v + '</v></c>';
+  }
+  let s = String(v);
+  if (s.length > 32000) s = s.slice(0, 32000);
+  return '<c r="' + ref + '" t="inlineStr"><is><t xml:space="preserve">' + esc(s) + '</t></is></c>';
+}
+
+function defaultWidth(c) {
+  if (c.t === 'd') return 20;
+  if (c.t === 'm') return 15;
+  if (c.t === 'q') return 13;
+  if (c.t === 'n') return 10;
+  return Math.max(12, Math.min(40, c.h.length + 4));
+}
+
+const NS_MAIN = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+const NS_REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+const XML_HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
+
+function sheetChunks(cols, rows) {
+  const out = [];
+  const CN = cols.map((_, i) => colName(i));
+  let head = XML_HEAD + '<worksheet xmlns="' + NS_MAIN + '"><dimension ref="A1:' + CN[cols.length - 1] + (rows.length + 1) + '"/>' +
+    '<sheetViews><sheetView workbookViewId="0">' +
+    '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>' +
+    '<selection pane="bottomLeft"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/><cols>';
+  cols.forEach((c, i) => {
+    head += '<col min="' + (i + 1) + '" max="' + (i + 1) + '" width="' + (c.w || defaultWidth(c)) + '" customWidth="1"/>';
+  });
+  head += '</cols><sheetData><row r="1">';
+  cols.forEach((c, i) => {
+    head += '<c r="' + CN[i] + '1" s="1" t="inlineStr"><is><t>' + esc(c.h) + '</t></is></c>';
+  });
+  head += '</row>';
+  out.push(enc.encode(head));
+
+  const STEP = 2000;
+  for (let s = 0; s < rows.length; s += STEP) {
+    const end = Math.min(rows.length, s + STEP);
+    const buf = [];
+    for (let r = s; r < end; r++) {
+      const row = rows[r], rn = r + 2;
+      let x = '<row r="' + rn + '">';
+      for (let c = 0; c < cols.length; c++) x += cellXml(CN[c] + rn, row[c], cols[c].t);
+      buf.push(x + '</row>');
+    }
+    out.push(enc.encode(buf.join('')));
+  }
+  out.push(enc.encode('</sheetData><autoFilter ref="A1:' + CN[cols.length - 1] + (rows.length + 1) + '"/></worksheet>'));
+  return out;
+}
+
+const STYLES_XML = XML_HEAD + '<styleSheet xmlns="' + NS_MAIN + '">' +
+  '<numFmts count="3">' +
+  '<numFmt numFmtId="164" formatCode="dd/mm/yyyy\\ hh:mm:ss"/>' +
+  '<numFmt numFmtId="165" formatCode="#,##0.00"/>' +
+  '<numFmt numFmtId="166" formatCode="#,##0.00######"/>' +
+  '</numFmts>' +
+  '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font>' +
+  '<font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font></fonts>' +
+  '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>' +
+  '<fill><patternFill patternType="solid"><fgColor rgb="FF1D6F42"/><bgColor indexed="64"/></patternFill></fill></fills>' +
+  '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>' +
+  '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
+  '<cellXfs count="5">' +
+  '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>' +
+  '<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>' +
+  '<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>' +
+  '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>' +
+  '<xf numFmtId="166" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>' +
+  '</cellXfs>' +
+  '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>';
+
+async function buildXlsx(sheets) {
+  // divide abas que passariam do limite de linhas do Excel
+  const list = [];
+  for (const sh of sheets) {
+    if (sh.rows.length <= MAXROWS) { list.push(sh); continue; }
+    for (let i = 0, p = 1; i < sh.rows.length; i += MAXROWS, p++) {
+      list.push({ name: p === 1 ? sh.name : sh.name + ' ' + p, cols: sh.cols, rows: sh.rows.slice(i, i + MAXROWS) });
+    }
+  }
+  const strFile = (name, str) => ({ name, chunks: [enc.encode(str)] });
+  const files = [];
+
+  let ct = XML_HEAD + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+    '<Default Extension="xml" ContentType="application/xml"/>' +
+    '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+    '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>';
+  list.forEach((_, i) => {
+    ct += '<Override PartName="/xl/worksheets/sheet' + (i + 1) + '.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>';
+  });
+  ct += '</Types>';
+  files.push(strFile('[Content_Types].xml', ct));
+
+  files.push(strFile('_rels/.rels', XML_HEAD +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    '<Relationship Id="rId1" Type="' + NS_REL + '/officeDocument" Target="xl/workbook.xml"/></Relationships>'));
+
+  const used = new Set();
+  let wb = XML_HEAD + '<workbook xmlns="' + NS_MAIN + '" xmlns:r="' + NS_REL + '"><sheets>';
+  list.forEach((sh, i) => {
+    let nm = sh.name.replace(/[\\\/?*\[\]:]/g, ' ').slice(0, 31);
+    while (used.has(nm.toLowerCase())) nm = nm.slice(0, 28) + '_' + (i + 1);
+    used.add(nm.toLowerCase());
+    wb += '<sheet name="' + esc(nm) + '" sheetId="' + (i + 1) + '" r:id="rId' + (i + 1) + '"/>';
+  });
+  wb += '</sheets></workbook>';
+  files.push(strFile('xl/workbook.xml', wb));
+
+  let rel = XML_HEAD + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">';
+  list.forEach((_, i) => {
+    rel += '<Relationship Id="rId' + (i + 1) + '" Type="' + NS_REL + '/worksheet" Target="worksheets/sheet' + (i + 1) + '.xml"/>';
+  });
+  rel += '<Relationship Id="rId' + (list.length + 1) + '" Type="' + NS_REL + '/styles" Target="styles.xml"/></Relationships>';
+  files.push(strFile('xl/_rels/workbook.xml.rels', rel));
+  files.push(strFile('xl/styles.xml', STYLES_XML));
+
+  list.forEach((sh, i) => {
+    files.push({ name: 'xl/worksheets/sheet' + (i + 1) + '.xml', chunks: sheetChunks(sh.cols, sh.rows) });
+  });
+  return await makeZip(files);
+}
+
+/* =====================================================================
+ *  Leitura de ZIP (para quem recebe os XMLs compactados)
+ * ===================================================================== */
+async function inflateRaw(u8) {
+  if (typeof DecompressionStream === 'undefined') {
+    throw new Error('este navegador não descompacta ZIP; use Chrome, Edge, Firefox ou Safari atualizados, ou extraia os arquivos antes');
+  }
+  const stream = new Blob([u8]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+function decodeXml(u8) {
+  let t = new TextDecoder('utf-8').decode(u8);
+  const m = t.slice(0, 200).match(/encoding=["']([^"']+)["']/i);
+  if (m && !/^utf-?8$/i.test(m[1])) {
+    try { t = new TextDecoder(m[1]).decode(u8); } catch (e) { /* mantém UTF-8 */ }
+  }
+  return t;
+}
+async function* zipEntries(file) {
+  const size = file.size;
+  if (size < 22) throw new Error('arquivo ZIP vazio ou inválido');
+  const tailLen = Math.min(size, 65557);
+  const tail = new DataView(await file.slice(size - tailLen, size).arrayBuffer());
+  let eocd = -1;
+  for (let i = tailLen - 22; i >= 0; i--) {
+    if (tail.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('ZIP inválido ou corrompido');
+  const total = tail.getUint16(eocd + 10, true);
+  const cdSize = tail.getUint32(eocd + 12, true);
+  const cdOff = tail.getUint32(eocd + 16, true);
+  if (cdOff === 0xFFFFFFFF || total === 0xFFFF) throw new Error('ZIP acima de 4 GB não é suportado; divida em partes menores');
+  const cd = new DataView(await file.slice(cdOff, cdOff + cdSize).arrayBuffer());
+  const dec = new TextDecoder();
+  let p = 0;
+  for (let i = 0; i < total; i++) {
+    if (p + 46 > cd.byteLength || cd.getUint32(p, true) !== 0x02014b50) break;
+    const flags = cd.getUint16(p + 8, true);
+    const method = cd.getUint16(p + 10, true);
+    const csize = cd.getUint32(p + 20, true);
+    const nlen = cd.getUint16(p + 28, true);
+    const elen = cd.getUint16(p + 30, true);
+    const clen = cd.getUint16(p + 32, true);
+    const off = cd.getUint32(p + 42, true);
+    const name = dec.decode(new Uint8Array(cd.buffer, cd.byteOffset + p + 46, nlen));
+    p += 46 + nlen + elen + clen;
+    if (!/\.xml$/i.test(name) || /(^|\/)__MACOSX\//.test(name)) continue;
+    if (flags & 1) { yield { name, error: 'arquivo protegido por senha' }; continue; }
+    const lh = new DataView(await file.slice(off, off + 30).arrayBuffer());
+    const start = off + 30 + lh.getUint16(26, true) + lh.getUint16(28, true);
+    let data = new Uint8Array(await file.slice(start, start + csize).arrayBuffer());
+    if (method === 8) data = await inflateRaw(data);
+    else if (method !== 0) { yield { name, error: 'método de compactação não suportado' }; continue; }
+    yield { name, text: decodeXml(data) };
+  }
+}
+
+/* =====================================================================
+ *  Interpretação das notas
+ * ===================================================================== */
+let notes, events, eventKeys, ignored, stats;
+let DETAIL = true;
+function resetData() {
+  notes = new Map();
+  events = [];
+  eventKeys = new Set();
+  ignored = [];
+  stats = { xml: 0 };
+}
+resetData();
+
+function readNFe(inf, prot, source, idx) {
+  const ide = kid(inf, 'ide'), emit = kid(inf, 'emit'), dest = kid(inf, 'dest');
+  const tot = kid(kid(inf, 'total'), 'ICMSTot');
+  let chave = (inf.getAttribute('Id') || '').replace(/^NFe/i, '');
+  if (!chave && prot) chave = prot.chNFe || '';
+  const mod = at(ide, 'mod');
+  const base = {
+    chave,
+    tipo: mod === '55' ? 'NF-e' : mod === '65' ? 'NFC-e' : mod,
+    modelo: mod,
+    serie: num(at(ide, 'serie')),
+    numero: num(at(ide, 'nNF')),
+    emissao: toSerial(at(ide, 'dhEmi') || at(ide, 'dEmi')),
+    emitDoc: at(emit, 'CNPJ') || at(emit, 'CPF'),
+    emitNome: at(emit, 'xNome')
+  };
+  const d = Object.assign({}, base, {
+    operacao: at(ide, 'tpNF') === '0' ? 'Entrada' : at(ide, 'tpNF') === '1' ? 'Saída' : '',
+    natOp: at(ide, 'natOp'),
+    emitUF: at(emit, 'enderEmit/UF'),
+    destDoc: at(dest, 'CNPJ') || at(dest, 'CPF') || at(dest, 'idEstrangeiro'),
+    destNome: at(dest, 'xNome'),
+    destUF: at(dest, 'enderDest/UF'),
+    vProd: num(at(tot, 'vProd')),
+    vDesc: num(at(tot, 'vDesc')),
+    vFrete: num(at(tot, 'vFrete')),
+    vSeg: num(at(tot, 'vSeg')),
+    vOutro: num(at(tot, 'vOutro')),
+    vBC: num(at(tot, 'vBC')),
+    vICMS: num(at(tot, 'vICMS')),
+    vST: num(at(tot, 'vST')),
+    vIPI: num(at(tot, 'vIPI')),
+    vPIS: num(at(tot, 'vPIS')),
+    vCOFINS: num(at(tot, 'vCOFINS')),
+    vNF: num(at(tot, 'vNF')),
+    nProt: prot ? prot.nProt : '',
+    dhProt: prot ? prot.dh : '',
+    statusSefaz: prot ? (prot.cStat + (prot.xMotivo ? ' - ' + prot.xMotivo : '')) : '',
+    ambiente: at(ide, 'tpAmb') === '1' ? 'Produção' : at(ide, 'tpAmb') === '2' ? 'Homologação' : '',
+    infCpl: at(inf, 'infAdic/infCpl'),
+    arquivo: source
+  });
+
+  const items = [];
+  for (const det of kids(inf, 'det')) {
+    const prod = kid(det, 'prod'), imp = kid(det, 'imposto');
+    const icms = first(kid(imp, 'ICMS'));
+    const pis = first(kid(imp, 'PIS'));
+    const cof = first(kid(imp, 'COFINS'));
+    const ipi = kid(imp, 'IPI');
+    const ipiS = kid(ipi, 'IPITrib') || kid(ipi, 'IPINT');
+    const it = Object.assign({}, base, {
+      item: num(det.getAttribute('nItem')),
+      cProd: at(prod, 'cProd'),
+      ean: at(prod, 'cEAN'),
+      desc: at(prod, 'xProd'),
+      ncm: at(prod, 'NCM'),
+      cest: at(prod, 'CEST'),
+      cfop: at(prod, 'CFOP'),
+      un: at(prod, 'uCom'),
+      qtd: num(at(prod, 'qCom')),
+      vUn: num(at(prod, 'vUnCom')),
+      vProd: num(at(prod, 'vProd')),
+      vDesc: num(at(prod, 'vDesc')),
+      vFrete: num(at(prod, 'vFrete')),
+      vOutro: num(at(prod, 'vOutro')),
+      orig: at(icms, 'orig'),
+      cstIcms: at(icms, 'CST') || at(icms, 'CSOSN'),
+      bcIcms: num(at(icms, 'vBC')),
+      aliqIcms: num(at(icms, 'pICMS')),
+      vIcms: num(at(icms, 'vICMS')),
+      vIcmsSt: num(at(icms, 'vICMSST')),
+      vICMSSTRet: num(at(icms, 'vICMSSTRet')),
+      cstIpi: at(ipiS, 'CST'),
+      pIpi: num(at(ipiS, 'pIPI')),
+      vIpi: num(at(ipiS, 'vIPI')),
+      cstPis: at(pis, 'CST'),
+      pPis: num(at(pis, 'pPIS')),
+      vPis: num(at(pis, 'vPIS')),
+      cstCofins: at(cof, 'CST'),
+      pCofins: num(at(cof, 'pCOFINS')),
+      vCofins: num(at(cof, 'vCOFINS'))
+    });
+    if (DETAIL) {
+      const uf = kid(imp, 'ICMSUFDest');
+      const ib = kid(imp, 'IBSCBS'), ig = kid(ib, 'gIBSCBS');
+      Object.assign(it, {
+        vSeg: num(at(prod, 'vSeg')),
+        cBenef: at(prod, 'cBenef'),
+        uTrib: at(prod, 'uTrib'),
+        qTrib: num(at(prod, 'qTrib')),
+        vUnTrib: num(at(prod, 'vUnTrib')),
+        vTotTrib: num(at(imp, 'vTotTrib')),
+        modBC: at(icms, 'modBC'),
+        pRedBC: num(at(icms, 'pRedBC')),
+        pDif: num(at(icms, 'pDif')),
+        vICMSDif: num(at(icms, 'vICMSDif')),
+        vICMSDeson: num(at(icms, 'vICMSDeson')),
+        motDesICMS: at(icms, 'motDesICMS'),
+        vBCFCP: num(at(icms, 'vBCFCP')),
+        pFCP: num(at(icms, 'pFCP')),
+        vFCP: num(at(icms, 'vFCP')),
+        modBCST: at(icms, 'modBCST'),
+        pMVAST: num(at(icms, 'pMVAST')),
+        pRedBCST: num(at(icms, 'pRedBCST')),
+        bcIcmsSt: num(at(icms, 'vBCST')),
+        pICMSST: num(at(icms, 'pICMSST')),
+        vBCFCPST: num(at(icms, 'vBCFCPST')),
+        pFCPST: num(at(icms, 'pFCPST')),
+        vFCPST: num(at(icms, 'vFCPST')),
+        vBCSTRet: num(at(icms, 'vBCSTRet')),
+        pST: num(at(icms, 'pST')),
+        vICMSSubstituto: num(at(icms, 'vICMSSubstituto')),
+        vICMSSTRet: num(at(icms, 'vICMSSTRet')),
+        pCredSN: num(at(icms, 'pCredSN')),
+        vCredICMSSN: num(at(icms, 'vCredICMSSN')),
+        cEnq: at(ipi, 'cEnq'),
+        bcIpi: num(at(ipiS, 'vBC')),
+        vBCII: num(at(imp, 'II/vBC')),
+        vII: num(at(imp, 'II/vII')),
+        bcPis: num(at(pis, 'vBC')),
+        bcCofins: num(at(cof, 'vBC')),
+        bcIssqn: num(at(imp, 'ISSQN/vBC')),
+        aliqIssqn: num(at(imp, 'ISSQN/vAliq')),
+        vIssqn: num(at(imp, 'ISSQN/vISSQN')),
+        vBCUFDest: num(at(uf, 'vBCUFDest')),
+        pFCPUFDest: num(at(uf, 'pFCPUFDest')),
+        pICMSUFDest: num(at(uf, 'pICMSUFDest')),
+        pICMSInter: num(at(uf, 'pICMSInter')),
+        vFCPUFDest: num(at(uf, 'vFCPUFDest')),
+        vICMSUFDest: num(at(uf, 'vICMSUFDest')),
+        vICMSUFRemet: num(at(uf, 'vICMSUFRemet')),
+        cstIbs: at(ib, 'CST'),
+        cClassTrib: at(ib, 'cClassTrib'),
+        bcIbs: num(at(ig, 'vBC')),
+        pIBSUF: num(at(ig, 'gIBSUF/pIBSUF')),
+        vIBSUF: num(at(ig, 'gIBSUF/vIBSUF')),
+        pIBSMun: num(at(ig, 'gIBSMun/pIBSMun')),
+        vIBSMun: num(at(ig, 'gIBSMun/vIBSMun')),
+        vIBS: num(at(ig, 'vIBS')),
+        pCBS: num(at(ig, 'gCBS/pCBS')),
+        vCBS: num(at(ig, 'gCBS/vCBS'))
+      });
+    }
+    items.push(it);
+  }
+
+  const pays = [];
+  const pag = kid(inf, 'pag');
+  if (pag) {
+    let dets = kids(pag, 'detPag');
+    if (!dets.length && kid(pag, 'tPag')) dets = [pag];
+    for (const dp of dets) {
+      const cod = at(dp, 'tPag');
+      pays.push(Object.assign({}, base, {
+        codForma: cod,
+        forma: at(dp, 'xPag') || FORMAS_PAG[cod] || '',
+        valor: num(at(dp, 'vPag'))
+      }));
+    }
+  }
+  return { chave, source, prot, d, items, pays };
+}
+
+function processXml(text, source) {
+  const doc = new DOMParser().parseFromString(text, 'application/xml');
+  if (doc.getElementsByTagName('parsererror').length) {
+    ignored.push({ arquivo: source, motivo: 'XML inválido ou corrompido' });
+    return;
+  }
+  const infs = Array.from(doc.getElementsByTagNameNS('*', 'infNFe'));
+  if (infs.length) {
+    const prots = new Map();
+    for (const p of doc.getElementsByTagNameNS('*', 'infProt')) {
+      const ch = at(p, 'chNFe');
+      prots.set(ch, {
+        chNFe: ch, nProt: at(p, 'nProt'), cStat: at(p, 'cStat'),
+        xMotivo: at(p, 'xMotivo'), dh: toSerial(at(p, 'dhRecbto'))
+      });
+    }
+    infs.forEach((inf, idx) => {
+      const ch = (inf.getAttribute('Id') || '').replace(/^NFe/i, '');
+      let prot = prots.get(ch) || null;
+      if (!prot && infs.length === 1 && prots.size === 1) prot = prots.values().next().value;
+      const n = readNFe(inf, prot, source, idx);
+      const key = n.chave || ('sem-chave:' + source + ':' + idx);
+      const old = notes.get(key);
+      if (old) {
+        if (!old.prot && n.prot) {
+          ignored.push({ arquivo: old.source, motivo: 'Substituída por uma versão com protocolo de autorização (' + source + ')' });
+          notes.set(key, n);
+        } else {
+          ignored.push({ arquivo: source, motivo: 'Duplicada: esta chave já foi lida em ' + old.source });
+        }
+        return;
+      }
+      notes.set(key, n);
+    });
+    return;
+  }
+
+  const evs = Array.from(doc.getElementsByTagNameNS('*', 'evento'));
+  if (evs.length) {
+    const ret = kid(doc.getElementsByTagNameNS('*', 'retEvento')[0], 'infEvento');
+    for (const ev of evs) {
+      const inf = kid(ev, 'infEvento');
+      if (!inf) continue;
+      const e = {
+        chave: at(inf, 'chNFe'),
+        tp: at(inf, 'tpEvento'),
+        seq: num(at(inf, 'nSeqEvento')),
+        desc: EVENTOS[at(inf, 'tpEvento')] || at(inf, 'detEvento/descEvento'),
+        dh: toSerial(at(inf, 'dhEvento')),
+        just: at(inf, 'detEvento/xJust'),
+        nProt: ret ? at(ret, 'nProt') : '',
+        cStat: ret ? at(ret, 'cStat') : '',
+        status: ret ? (at(ret, 'cStat') + ' - ' + at(ret, 'xMotivo')) : '',
+        arquivo: source
+      };
+      const k = e.chave + '|' + e.tp + '|' + e.seq;
+      if (eventKeys.has(k)) {
+        ignored.push({ arquivo: source, motivo: 'Evento duplicado' });
+        continue;
+      }
+      eventKeys.add(k);
+      events.push(e);
+    }
+    return;
+  }
+
+  const root = doc.documentElement.localName;
+  if (/inut/i.test(root)) ignored.push({ arquivo: source, motivo: 'Inutilização de numeração (não é uma nota)' });
+  else ignored.push({ arquivo: source, motivo: 'Não é NF-e/NFC-e nem evento de NF-e (elemento raiz: ' + root + ')' });
+}
+
+function situacao(n, cancelSet) {
+  const st = n.prot && n.prot.cStat;
+  if (cancelSet.has(n.chave) || st === '101' || st === '151' || st === '155') return 'Cancelada';
+  if (st === '100' || st === '150') return 'Autorizada';
+  if (st === '110' || st === '301' || st === '302' || st === '303') return 'Denegada';
+  if (!n.prot) return 'Sem protocolo';
+  return 'Status ' + st;
+}
+
+function buildResumo(list) {
+  const map = new Map();
+  const sum = (a, b) => a + (typeof b === 'number' ? b : 0);
+  for (const n of list) {
+    if (n.d.situacao === 'Cancelada' || n.d.situacao === 'Denegada') continue;
+    for (const it of n.items) {
+      const key = [it.emitDoc, it.cProd, it.desc, it.ncm, it.cest, it.cfop, it.un, it.cstIcms, it.aliqIcms,
+        it.cstIpi, it.pIpi, it.cstPis, it.pPis, it.cstCofins, it.pCofins].join('|');
+      let g = map.get(key);
+      if (!g) {
+        g = { emitDoc: it.emitDoc, emitNome: it.emitNome, cProd: it.cProd, ean: it.ean, desc: it.desc, ncm: it.ncm,
+          cest: it.cest, cfop: it.cfop, un: it.un, cstIcms: it.cstIcms, aliqIcms: it.aliqIcms, cstIpi: it.cstIpi,
+          pIpi: it.pIpi, cstPis: it.cstPis, pPis: it.pPis, cstCofins: it.cstCofins, pCofins: it.pCofins,
+          n: 0, qtd: 0, vProd: 0, vIcms: 0, vIcmsSt: 0, vICMSSTRet: 0, vIpi: 0, vPis: 0, vCofins: 0 };
+        map.set(key, g);
+      }
+      g.n++;
+      g.qtd = sum(g.qtd, it.qtd);
+      g.vProd = sum(g.vProd, it.vProd);
+      g.vIcms = sum(g.vIcms, it.vIcms);
+      g.vIcmsSt = sum(g.vIcmsSt, it.vIcmsSt);
+      g.vICMSSTRet = sum(g.vICMSSTRet, it.vICMSSTRet);
+      g.vIpi = sum(g.vIpi, it.vIpi);
+      g.vPis = sum(g.vPis, it.vPis);
+      g.vCofins = sum(g.vCofins, it.vCofins);
+    }
+  }
+  const r2 = x => Math.round(x * 100) / 100;
+  const arr = Array.from(map.values());
+  arr.sort((a, b) => (a.emitNome || '').localeCompare(b.emitNome || '', 'pt-BR') ||
+    (a.desc || '').localeCompare(b.desc || '', 'pt-BR'));
+  return arr.map(g => {
+    g.qtd = Math.round(g.qtd * 1e4) / 1e4;
+    for (const k of ['vProd', 'vIcms', 'vIcmsSt', 'vICMSSTRet', 'vIpi', 'vPis', 'vCofins']) g[k] = r2(g[k]);
+    return COLS_RESUMO.map(c => g[c.k]);
+  });
+}
+
+function buildSheets(opts) {
+  const cancelSet = new Set(events
+    .filter(e => e.tp === '110111' && (!e.cStat || e.cStat === '135' || e.cStat === '155'))
+    .map(e => e.chave));
+  const list = Array.from(notes.values()).sort((a, b) =>
+    ((a.d.emissao || 0) - (b.d.emissao || 0)) || ((a.d.numero || 0) - (b.d.numero || 0)));
+
+  const colsI = colsItens(opts.detail);
+  let total = 0, canceladas = 0, itens = 0, nfe = 0, nfce = 0;
+  const notasRows = [], itensRows = [], pagRows = [];
+  for (const n of list) {
+    n.d.situacao = situacao(n, cancelSet);
+    if (n.d.situacao === 'Cancelada') canceladas++;
+    if (n.d.situacao === 'Autorizada' && typeof n.d.vNF === 'number') total += n.d.vNF;
+    if (n.d.modelo === '65') nfce++; else nfe++;
+    itens += n.items.length;
+    notasRows.push(COLS_NOTAS.map(c => n.d[c.k]));
+    if (opts.itens) for (const it of n.items) itensRows.push(colsI.map(c => it[c.k]));
+    if (opts.pagamentos) for (const p of n.pays) pagRows.push(COLS_PAG.map(c => p[c.k]));
+  }
+  const sheets = [{ name: 'Resumo', cols: COLS_NOTAS, rows: notasRows }];
+  if (opts.itens) sheets.push({ name: 'Itens', cols: colsI, rows: itensRows });
+  let produtos = 0;
+  if (opts.resumo) {
+    const resumoRows = buildResumo(list);
+    produtos = resumoRows.length;
+    if (produtos) sheets.push({ name: 'Resumo por produto', cols: COLS_RESUMO, rows: resumoRows });
+  }
+  if (opts.pagamentos && pagRows.length) sheets.push({ name: 'Pagamentos', cols: COLS_PAG, rows: pagRows });
+  if (events.length) sheets.push({ name: 'Eventos', cols: COLS_EVENTOS, rows: events.map(e => COLS_EVENTOS.map(c => e[c.k])) });
+  if (ignored.length) sheets.push({ name: 'Ignorados', cols: COLS_IGNORADOS, rows: ignored.map(g => COLS_IGNORADOS.map(c => g[c.k])) });
+  return { sheets, list, summary: { total, canceladas, itens, nfe, nfce, produtos } };
+}
+
+/* =====================================================================
+ *  Interface
+ * ===================================================================== */
+const $ = s => document.querySelector(s);
+const fmtInt = n => n.toLocaleString('pt-BR');
+const fmtMoney = n => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+const fmtDate = serial => {
+  if (typeof serial !== 'number') return '';
+  const d = new Date(Math.round((serial - 25569) * 86400000));
+  const p = x => String(x).padStart(2, '0');
+  return p(d.getUTCDate()) + '/' + p(d.getUTCMonth() + 1) + '/' + d.getUTCFullYear();
+};
+function el(tag, props, ...children) {
+  const e = document.createElement(tag);
+  if (props) for (const k in props) {
+    if (k === 'class') e.className = props[k];
+    else e[k] = props[k];
+  }
+  for (const c of children) if (c != null) e.append(c);
+  return e;
+}
+const yieldUI = () => new Promise(r => {
+  const ch = new MessageChannel();
+  ch.port1.onmessage = () => r();
+  ch.port2.postMessage(0);
+});
+
+let queue = [], queueKeys = new Set(), skippedOther = 0, running = false, lastBlob = null;
+const fileName = f => f._path || f.webkitRelativePath || f.name;
+const isZip = f => /\.zip$/i.test(f.name);
+
+function addFiles(files) {
+  for (const f of files) {
+    if (!/\.(xml|zip)$/i.test(f.name)) { skippedOther++; continue; }
+    const key = fileName(f) + '|' + f.size + '|' + f.lastModified;
+    if (queueKeys.has(key)) continue;
+    queueKeys.add(key);
+    queue.push(f);
+  }
+  refreshQueue();
+}
+function refreshQueue() {
+  const zips = queue.filter(isZip).length;
+  const xmls = queue.length - zips;
+  let t = 'Nenhum arquivo selecionado.';
+  if (queue.length) {
+    const parts = [];
+    if (xmls) parts.push(fmtInt(xmls) + (xmls === 1 ? ' arquivo XML' : ' arquivos XML'));
+    if (zips) parts.push(fmtInt(zips) + (zips === 1 ? ' arquivo ZIP' : ' arquivos ZIP'));
+    t = parts.join(' e ') + ' na lista.';
+  }
+  if (skippedOther) {
+    t += ' ' + fmtInt(skippedOther) + (skippedOther === 1
+      ? ' arquivo de outro tipo foi desconsiderado.'
+      : ' arquivos de outros tipos foram desconsiderados.');
+  }
+  $('#queueInfo').textContent = t;
+  $('#btnClear').hidden = !queue.length;
+  $('#btnRun').disabled = !queue.length || running;
+}
+
+async function collectDropped(dt) {
+  const entries = Array.from(dt.items || [])
+    .map(i => (i.webkitGetAsEntry ? i.webkitGetAsEntry() : null))
+    .filter(Boolean);
+  if (!entries.length) return Array.from(dt.files);
+  const out = [];
+  async function walk(entry) {
+    if (entry.isFile) {
+      const f = await new Promise((res, rej) => entry.file(res, rej));
+      f._path = entry.fullPath.replace(/^\//, '');
+      out.push(f);
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      let batch;
+      do {
+        batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+        for (const e of batch) await walk(e);
+      } while (batch.length);
+    }
+  }
+  for (const e of entries) await walk(e);
+  return out;
+}
+
+function saveBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+function stamp() {
+  const d = new Date(), p = x => String(x).padStart(2, '0');
+  return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
+}
+
+function setProgress(done, total, extra) {
+  $('#bar').max = total || 1;
+  $('#bar').value = done;
+  $('#progressText').textContent = 'Lendo arquivo ' + fmtInt(Math.min(done + 1, total)) + ' de ' + fmtInt(total) +
+    ' · ' + fmtInt(stats.xml) + ' XML lidos · ' + fmtInt(notes.size) + ' notas' + (extra || '');
+}
+
+async function run() {
+  if (running || !queue.length) return;
+  running = true;
+  $('#btnRun').disabled = true;
+  $('#result').hidden = true;
+  $('#progress').hidden = false;
+  resetData();
+  lastBlob = null;
+  const opts = { itens: true, pagamentos: false, detail: true, resumo: false };
+  DETAIL = opts.detail;
+  const total = queue.length;
+  let done = 0, lastYield = performance.now();
+  const tick = async () => {
+    if (performance.now() - lastYield > 100) {
+      setProgress(done, total);
+      await yieldUI();
+      lastYield = performance.now();
+    }
+  };
+
+  for (let i = 0; i < queue.length;) {
+    const f = queue[i];
+    if (isZip(f)) {
+      const zname = fileName(f);
+      try {
+        for await (const en of zipEntries(f)) {
+          const nm = zname + ' › ' + en.name;
+          if (en.error) { ignored.push({ arquivo: nm, motivo: 'Não foi possível ler: ' + en.error }); continue; }
+          try { processXml(en.text, nm); stats.xml++; }
+          catch (e) { ignored.push({ arquivo: nm, motivo: 'Erro ao processar: ' + e.message }); }
+          await tick();
+        }
+      } catch (e) {
+        ignored.push({ arquivo: zname, motivo: 'Não foi possível ler o ZIP: ' + e.message });
+      }
+      done++; i++;
+    } else {
+      const batch = [];
+      while (i < queue.length && batch.length < 24 && !isZip(queue[i])) batch.push(queue[i++]);
+      const bufs = await Promise.allSettled(batch.map(b => b.arrayBuffer()));
+      bufs.forEach((r, k) => {
+        const nm = fileName(batch[k]);
+        if (r.status !== 'fulfilled') { ignored.push({ arquivo: nm, motivo: 'Não foi possível ler o arquivo' }); return; }
+        try { processXml(decodeXml(new Uint8Array(r.value)), nm); stats.xml++; }
+        catch (e) { ignored.push({ arquivo: nm, motivo: 'Erro ao processar: ' + e.message }); }
+      });
+      done += batch.length;
+    }
+    await tick();
+  }
+
+  setProgress(total, total);
+  $('#progressText').textContent = 'Montando a planilha...';
+  await yieldUI();
+
+  let built = null, err = null;
+  if (notes.size || events.length) {
+    try {
+      built = buildSheets(opts);
+      lastBlob = await buildXlsx(built.sheets);
+    } catch (e) {
+      err = e;
+    }
+  }
+  $('#progress').hidden = true;
+  showResult(built, err);
+  running = false;
+  refreshQueue();
+}
+
+function showResult(built, err) {
+  const box = $('#result');
+  box.hidden = false;
+  box.replaceChildren();
+
+  if (!built || err) {
+    box.append(el('h2', null, err ? 'Não foi possível gerar a planilha' : 'Nenhuma nota encontrada'));
+    box.append(el('p', { class: 'err' }, err
+      ? err.message
+      : 'Os arquivos lidos não são NF-e nem NFC-e. Confira se são XMLs de nota fiscal (modelos 55 ou 65).'));
+  } else {
+    const s = built.summary;
+    box.append(el('h2', null, 'Planilha pronta'));
+    const rows = [
+      ['NF-e (modelo 55)', fmtInt(s.nfe)],
+      ['NFC-e (modelo 65)', fmtInt(s.nfce)],
+      ['Itens', fmtInt(s.itens)],
+      ...(s.produtos ? [['Produtos distintos no resumo', fmtInt(s.produtos)]] : []),
+      ['Notas canceladas', fmtInt(s.canceladas)],
+      ['Eventos', fmtInt(events.length)],
+      ['Arquivos ignorados', fmtInt(ignored.length)],
+      ['Valor das notas autorizadas', fmtMoney(s.total)]
+    ];
+    const tb = el('tbody');
+    for (const [k, v] of rows) tb.append(el('tr', null, el('td', null, k), el('td', null, v)));
+    box.append(el('table', { class: 'kv' }, tb));
+
+    const dl = el('div', { class: 'dl' });
+    const btn = el('button', { type: 'button', class: 'primary' }, 'Baixar planilha (.xlsx)');
+    btn.addEventListener('click', () => saveBlob(lastBlob, 'notas-fiscais-' + stamp() + '.xlsx'));
+    dl.append(btn, el('span', { class: 'note' }, (lastBlob.size < 1048576 ? Math.max(1, Math.round(lastBlob.size / 1024)) + ' KB' : (lastBlob.size / 1048576).toFixed(1).replace('.', ',') + ' MB')));
+    box.append(dl);
+
+    // prévia
+    const head = el('tr', null,
+      el('th', null, 'Tipo'), el('th', null, 'Número'), el('th', null, 'Emissão'),
+      el('th', null, 'Emitente'), el('th', null, 'Situação'), el('th', { class: 'r' }, 'Total'));
+    const body = el('tbody');
+    for (const n of built.list.slice(0, 8)) {
+      body.append(el('tr', null,
+        el('td', null, n.d.tipo), el('td', null, String(n.d.numero)), el('td', null, fmtDate(n.d.emissao)),
+        el('td', null, n.d.emitNome), el('td', null, n.d.situacao),
+        el('td', { class: 'r' }, typeof n.d.vNF === 'number' ? fmtMoney(n.d.vNF) : '')));
+    }
+    box.append(el('p', { class: 'note' }, 'Prévia das primeiras notas (por data de emissão):'));
+    box.append(el('div', { class: 'scroll' }, el('table', { class: 'prev' }, el('thead', null, head), body)));
+  }
+
+  if (ignored.length) {
+    const ul = el('ul');
+    for (const g of ignored.slice(0, 50)) ul.append(el('li', null, g.arquivo + ': ' + g.motivo));
+    if (ignored.length > 50) ul.append(el('li', null, '... e mais ' + fmtInt(ignored.length - 50) + '. A lista completa está na aba “Ignorados” da planilha.'));
+    box.append(el('details', null, el('summary', null, 'Ver arquivos ignorados (' + fmtInt(ignored.length) + ')'), ul));
+  }
+  box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+/* eventos da página */
+$('#btnFiles').addEventListener('click', () => $('#inFiles').click());
+$('#btnFolder').addEventListener('click', () => $('#inFolder').click());
+$('#inFiles').addEventListener('change', e => { addFiles(Array.from(e.target.files)); e.target.value = ''; });
+$('#inFolder').addEventListener('change', e => { addFiles(Array.from(e.target.files)); e.target.value = ''; });
+$('#btnClear').addEventListener('click', () => {
+  if (running) return;
+  queue = []; queueKeys = new Set(); skippedOther = 0;
+  $('#result').hidden = true;
+  refreshQueue();
+});
+$('#btnRun').addEventListener('click', run);
+
+const drop = $('#drop');
+['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'dragend'].forEach(ev => drop.addEventListener(ev, () => drop.classList.remove('over')));
+drop.addEventListener('drop', async e => {
+  e.preventDefault();
+  drop.classList.remove('over');
+  const files = await collectDropped(e.dataTransfer);
+  addFiles(files);
+});
+// evita que o navegador abra o arquivo se ele for solto fora da área
+['dragover', 'drop'].forEach(ev => window.addEventListener(ev, e => e.preventDefault()));
+
+refreshQueue();
+})();
+</script>
+</body>
+</html>

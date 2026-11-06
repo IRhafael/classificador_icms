@@ -6,6 +6,8 @@
 //   Motivos de revisão:
 //   • multiplo   → o mesmo produto aparece com NCMs diferentes na planilha
 //   • descricao  → o NCM não combina com a descrição (ver ncm-rules.js)
+//   Quando o produto tem GTIN com NCM na base (gtin.js), esse NCM é a
+//   sugestão prioritária e não é tratado como suspeito.
 // ════════════════════════════════════════════════════════════════════
 const NcmNormalizer = (() => {
   const STORAGE_KEY = 'ncm_product_corrections_v1';
@@ -35,9 +37,11 @@ const NcmNormalizer = (() => {
   }
 
   // opts.check(ncm, desc) → resultado de checkNcmCoherence (ou null)
+  // opts.gtinNcm(rawGtin, desc) → { ncm, fonte } quando o GTIN tem NCM aplicável
   function analyze(rowsIn, opts) {
     opts = opts || {};
     const check = opts.check || (() => null);
+    const gtinNcm = opts.gtinNcm || (() => null);
     const rows = rowsIn.map(row => row || []);
     const loc = locate(rows);
     if (!loc) return [];
@@ -52,19 +56,25 @@ const NcmNormalizer = (() => {
       const rawNcm = row[columns.NCM];
       if ((!sku && !description) || rawNcm == null || String(rawNcm).replace(/\D/g, '') === '') continue;
       const key = productKey(sku, description);
-      if (!products.has(key)) products.set(key, { key, sku, description, counts: new Map() });
+      if (!products.has(key)) products.set(key, { key, sku, description, counts: new Map(), gtin: new Map() });
       const ncm = pad8(rawNcm);
-      const counts = products.get(key).counts;
-      counts.set(ncm, (counts.get(ncm) || 0) + 1);
+      const prod = products.get(key);
+      prod.counts.set(ncm, (prod.counts.get(ncm) || 0) + 1);
+      if (columns.GTIN != null) {
+        const gn = gtinNcm(row[columns.GTIN], description);
+        if (gn && gn.ncm) prod.gtin.set(gn.ncm, gn.fonte || 'GTIN');
+      }
     }
 
     const out = [];
     for (const p of products.values()) {
       const counts = [...p.counts.entries()].sort((a, b) => b[1] - a[1]);
-      const coh = new Map(counts.map(([n]) => [n, check(n, p.description)]));
+      // NCM do GTIN só vale como sugestão se for único para o produto
+      const ncmGtin = p.gtin.size === 1 ? [...p.gtin.keys()][0] : '';
+      const coh = new Map(counts.map(([n]) => [n, n === ncmGtin ? null : check(n, p.description)]));
       const suspeitos = counts.filter(([n]) => coh.get(n));
       const multiplo = counts.length > 1;
-      if (!multiplo && !suspeitos.length) continue;
+      if (!multiplo && !suspeitos.length && p.gtin.size < 2) continue;
 
       const saved = corrections[p.key] || '';
       // Sugestão: decisão salva › NCM do próprio produto que combina com a descrição
@@ -73,17 +83,19 @@ const NcmNormalizer = (() => {
       const primeiroCoh = suspeitos.length ? coh.get(suspeitos[0][0]) : null;
       let suggestion = '', fonte = '';
       if (saved) { suggestion = saved; fonte = 'revisado'; }
+      else if (ncmGtin) { suggestion = ncmGtin; fonte = 'GTIN: ' + p.gtin.get(ncmGtin); }
       else if (suspeitos.length && coerente) { suggestion = coerente[0]; fonte = 'NCM do próprio produto compatível com a descrição'; }
       else if (primeiroCoh && primeiroCoh.sugerido) { suggestion = primeiroCoh.sugerido; fonte = 'categoria: ' + primeiroCoh.nome; }
       else if (multiplo) { suggestion = counts[0][0]; fonte = 'NCM mais frequente do produto'; }
 
       const motivos = [];
       if (multiplo) motivos.push(`${counts.length} NCMs diferentes para o mesmo produto`);
+      if (p.gtin.size > 1) motivos.push(`GTINs do produto indicam NCMs diferentes: ${[...p.gtin.keys()].map(fmtNcm).join(', ')}`);
       for (const [n] of suspeitos) motivos.push(`${fmtNcm(n)}: ${coh.get(n).msg}`);
 
       out.push({ key: p.key, sku: p.sku, description: p.description, counts, multiplo,
                  suspeitos: suspeitos.map(([n]) => ({ ncm: n, ...coh.get(n) })), motivos,
-                 suggestion, fonte, reviewed: !!saved,
+                 suggestion, fonte, reviewed: !!saved, ncmGtin,
                  // confirmado = usuário manteve um NCM que a regra acha suspeito
                  confirmed: !!saved && counts.length === 1 && counts[0][0] === saved });
     }

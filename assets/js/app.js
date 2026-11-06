@@ -27,6 +27,10 @@ updateDbCount();
 
 try { const v = localStorage.getItem('ncm_api_on'); if (v === '0') $('api-toggle').checked = false; } catch (e) {}
 $('api-toggle').addEventListener('change', e => { try { localStorage.setItem('ncm_api_on', e.target.checked ? '1' : '0'); } catch (x) {} });
+for (const [id, key] of [['gtin-toggle', 'gtin_on'], ['gtin-free-toggle', 'gtin_precomelhor_on'], ['gtin-sefaz-toggle', 'gtin_sefaz_on']]) {
+  try { const v = localStorage.getItem(key); if (v != null) $(id).checked = v === '1'; } catch (e) {}
+  $(id).addEventListener('change', e => { try { localStorage.setItem(key, e.target.checked ? '1' : '0'); } catch (x) {} });
+}
 
 // ── Upload / Drag ───────────────────────────────────────────────────
 const dropZone = $('drop-zone');
@@ -76,30 +80,29 @@ function processFile(file) {
       const sheetName = wb.SheetNames[0];
       const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: null });
 
-      // NCMs distintos para a consulta oficial
-      const hIdx = findHeader(rows);
+      // 1º GTIN (prioritário): o NCM da base GTIN substitui o informado
+      let gtinInfo = null;
+      if ($('gtin-toggle').checked) {
+        const gtins = GtinBase.collect(rows);
+        setProgress(28, `Consultando ${gtins.length} GTIN(s)…`);
+        gtinInfo = await GtinBase.lookupMany(gtins, (d, t, msg) => setProgress(28 + Math.round(10 * (t ? d / t : 0)), msg),
+                                             gtinLookupOptions());
+      }
+      lastInput = { rows, sheetName, fileName: file.name, ncmInfo: new Map(), gtinInfo };
+
+      // 2º NCMs distintos (informados, do GTIN e sugeridos) para a consulta na tabela oficial
       let ncmInfo = new Map();
       if ($('api-toggle').checked) {
+        const prep = prepareRows();
         const codes = new Set();
-        const normalizedRows = NcmNormalizer.apply(rows);
-        const normalizedHeader = findHeader(normalizedRows);
-        if (normalizedHeader >= 0) {
-          const iN = mapColumns(normalizedRows[normalizedHeader]).NCM;
-          for (let r = normalizedHeader + 1; r < normalizedRows.length; r++) {
-            const v = normalizedRows[r] && normalizedRows[r][iN];
-            if (v != null && String(v).replace(/\D/g, '')) codes.add(pad8(v));
-          }
-        } else {
-          for (const r of rows) for (const v of (r || [])) if (/^\d{7,8}$/.test(String(v || '').trim())) codes.add(pad8(v));
-        }
-        // NCMs sugeridos na revisão também são consultados (descrição oficial na tela)
-        for (const p of NcmNormalizer.analyze(rows, { check: checkNcmCoherence })) if (p.suggestion) codes.add(pad8(p.suggestion));
-        setProgress(35, `Consultando ${codes.size} NCMs na tabela oficial…`);
-        ncmInfo = await NcmAPI.lookupMany([...codes], (d, t, msg) => setProgress(35 + Math.round(30 * (t ? d / t : 0)), msg));
+        for (const set of [rows, prep.gtinRows, prep.finalRows]) for (const c of ncmCodesOf(set)) codes.add(c);
+        for (const p of prep.review) if (p.suggestion) codes.add(pad8(p.suggestion));
+        setProgress(40, `Consultando ${codes.size} NCMs na tabela oficial…`);
+        ncmInfo = await NcmAPI.lookupMany([...codes], (d, t, msg) => setProgress(40 + Math.round(25 * (t ? d / t : 0)), msg));
       }
 
       setProgress(70, 'Aplicando classificações…');
-      lastInput = { rows, sheetName, fileName: file.name, ncmInfo };
+      lastInput.ncmInfo = ncmInfo;
       runClassification();
     } catch (err) {
       fail('Erro ao processar o arquivo: ' + err.message, err);
@@ -108,11 +111,35 @@ function processFile(file) {
   reader.readAsArrayBuffer(file);
 }
 
+function ncmCodesOf(rows) {
+  const out = new Set(), h = findHeader(rows);
+  if (h < 0) { for (const r of rows) for (const v of (r || [])) if (/^\d{7,8}$/.test(String(v || '').trim())) out.add(pad8(v)); return out; }
+  const C = mapColumns(rows[h]);
+  for (let r = h + 1; r < rows.length; r++) for (const i of [C.NCM, C.NCM_ORIG]) {
+    const v = i != null && rows[r] ? rows[r][i] : null;
+    if (v != null && String(v).replace(/\D/g, '')) out.add(pad8(v));
+  }
+  return out;
+}
+
+// Ordem de prioridade do NCM: revisão manual › GTIN › NCM informado
+function prepareRows() {
+  const { rows, gtinInfo } = lastInput;
+  const g = gtinInfo ? GtinBase.apply(rows, gtinInfo) : { rows: rows.map(r => (r || []).slice()), shared: new Set() };
+  const gtinNcm = (raw, desc) => {
+    if (!gtinInfo) return null;
+    const d = gtinDecision(raw, desc, gtinInfo, g.shared);
+    return d.situacao === 'ok' ? { ncm: d.ncm, fonte: d.fonte } : null;
+  };
+  const review = NcmNormalizer.analyze(g.rows, { check: checkNcmCoherence, gtinNcm });
+  return { gtinRows: g.rows, finalRows: NcmNormalizer.apply(g.rows), shared: g.shared, review };
+}
+
 function runClassification() {
-  const { rows, sheetName, fileName, ncmInfo } = lastInput;
-  const rowsWithNormalizedNcm = NcmNormalizer.apply(rows);
-  const res = classifyRows(rowsWithNormalizedNcm, ncmInfo, NCM_DB, { isConfirmed: NcmNormalizer.isConfirmed });
-  const review = NcmNormalizer.analyze(rows, { check: checkNcmCoherence }).map(p => Object.assign(p, { impacto: reviewImpact(p) }));
+  const { sheetName, fileName, ncmInfo, gtinInfo } = lastInput;
+  const prep = prepareRows();
+  const res = classifyRows(prep.finalRows, ncmInfo, NCM_DB, { isConfirmed: NcmNormalizer.isConfirmed, gtinInfo, gtinShared: prep.shared });
+  const review = prep.review.map(p => Object.assign(p, { impacto: reviewImpact(p) }));
   setProgress(85, 'Gerando arquivo…');
   resultWorkbook = buildWorkbook(res, sheetName, review);
   resultFileName = fileName.replace(/\.xlsx?$/i, '') + ' - classificado.xlsx';
@@ -227,7 +254,8 @@ function buildWorkbook(res, sheetName, review) {
     if (i === C.OBS) return { wch: 55 };
     if (i === C.STATUS) return { wch: 70 };
     if (i === C.DESC) return { wch: 40 };
-    if (i === C.NCM_SUG || i === C.NCM_ORIG) return { wch: 14 };
+    if (i === C.NCM_SUG || i === C.NCM_ORIG || i === C.NCM_GTIN || i === C.GTIN) return { wch: 15 };
+    if (i === C.NCM_FONTE) return { wch: 30 };
     return { wch: Math.max(10, String(h || '').length + 2) };
   });
   const ws = XLSX.utils.aoa_to_sheet(res.rows);
@@ -255,6 +283,24 @@ function buildWorkbook(res, sheetName, review) {
     ws3['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: lines.length, c: head.length - 1 } }) };
     XLSX.utils.book_append_sheet(wb, ws3, 'Revisão NCM');
   }
+
+  if (res.gtinReport && res.gtinReport.length) {
+    const SIT = { ok: 'NCM do GTIN aplicado', 'sem-base': 'Sem cadastro — usado NCM informado', 'sem-ncm': 'GTIN sem NCM — usado NCM informado',
+                  compartilhado: 'Não aplicado — GTIN usado p/ produtos diferentes', 'desc-diverge': 'Não aplicado — descrição não confere',
+                  invalido: 'GTIN inválido', interno: 'GTIN interno (balança/loja)' };
+    const head = ['GTIN', 'DESCRIÇÃO NA PLANILHA', 'NCM INFORMADO', 'NCM DO GTIN', 'CONFERE?', 'DESCRIÇÃO NA BASE GTIN', 'FONTE', 'SITUAÇÃO', 'LINHAS', 'OBSERVAÇÃO'];
+    const lines = res.gtinReport.map(r => {
+      const inf = [...r.ncmInf];
+      const confere = !r.ncmGtin ? '' : inf.length === 1 && inf[0] === r.ncmGtin ? 'sim' : 'NÃO';
+      return [fmtGtin(r.gtin), r.desc, inf.map(fmtNcm).join(' / '), r.ncmGtin ? fmtNcm(r.ncmGtin) : '', confere, r.descGtin, r.fonte,
+              SIT[r.situacao] || r.situacao, r.linhas, [r.motivo, r.conflito ? 'base com outros NCMs: ' + r.conflito.map(fmtNcm).join(', ') : ''].filter(Boolean).join(' | ')];
+    });
+    lines.sort((a, b) => (a[4] === 'NÃO' ? 0 : 1) - (b[4] === 'NÃO' ? 0 : 1) || String(a[1]).localeCompare(String(b[1]), 'pt-BR'));
+    const ws4 = XLSX.utils.aoa_to_sheet([head, ...lines]);
+    ws4['!cols'] = [{ wch: 15 }, { wch: 40 }, { wch: 22 }, { wch: 12 }, { wch: 9 }, { wch: 40 }, { wch: 30 }, { wch: 34 }, { wch: 7 }, { wch: 60 }];
+    ws4['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: lines.length, c: head.length - 1 } }) };
+    XLSX.utils.book_append_sheet(wb, ws4, 'Validação GTIN');
+  }
   return wb;
 }
 
@@ -280,6 +326,19 @@ function renderResults(res, ncmInfo) {
   $('parse-notes').hidden = !avisos.length;
   const newCount = Object.keys(res.newNCMs).length;
   $('t-new').textContent = fmt(newCount);
+  $('t-gtin').textContent = fmt(s.gtinConfirmado + s.gtinCorrigido);
+  $('t-gtin-sub').textContent = s.temGtin
+    ? [s.gtinCorrigido ? `${fmt(s.gtinCorrigido)} corrigidas` : '', s.gtinSemBase ? `${fmt(s.gtinSemBase)} sem cadastro` : '',
+       s.gtinNaoAplicado ? `${fmt(s.gtinNaoAplicado)} não aplicadas` : '', s.gtinInvalido ? `${fmt(s.gtinInvalido)} GTIN inválido` : ''].filter(Boolean).join(' · ')
+    : ($('gtin-toggle').checked ? 'planilha sem coluna GTIN' : 'consulta GTIN desligada');
+  const gs = $('gtin-status');
+  if (s.temGtin) {
+    const cm = GtinBase.mode();
+    gs.textContent = `GTIN (prioritário): ${fmt(s.gtinConfirmado)} linha(s) com NCM confirmado e ${fmt(s.gtinCorrigido)} corrigida(s) pelo GTIN; ` +
+      `${fmt(s.gtinSemBase + s.semGtin)} seguiram com o NCM informado (sem GTIN ou sem cadastro).` + (cm.msg ? ' ' + cm.msg : '');
+    gs.className = 'api-status ' + (cm.sefaz === 'erro' || cm.free === 'erro' ? 'off' : 'ok');
+    gs.hidden = false;
+  } else gs.hidden = true;
 
   const mode = $('api-toggle').checked ? NcmAPI.mode() : 'desligada';
   const st = $('api-status');
@@ -373,15 +432,126 @@ function reclassifyWithCustom() {
   $('actions-note').textContent = `↻ Reclassificado com ${saved} NCM(s) novo(s) — ` + $('actions-note').textContent;
 }
 
-// ── Consulta avulsa ─────────────────────────────────────────────────
+// ── Base GTIN (painel) ──────────────────────────────────────────────
+function updateGtinCount() { $('gtin-count').textContent = GtinBase.count().toLocaleString('pt-BR'); }
+function gtinMsg(html) { const b = $('gtin-msg'); b.hidden = !html; b.innerHTML = html || ''; }
+updateGtinCount();
+$('sefaz-connect').addEventListener('click', async () => {
+  const status = $('sefaz-status');
+  const button = $('sefaz-connect');
+  const token = $('sefaz-token').value.trim();
+  const file = $('sefaz-pfx').files[0];
+  if (!token) { status.textContent = 'Cole o token que apareceu no terminal do conector.'; gtinMsg(status.textContent); $('sefaz-token').focus(); return; }
+  if (!file && !$('sefaz-status').textContent.includes('certificado carregado')) {
+    status.textContent = 'Selecione o arquivo .pfx/.p12 e informe a senha.'; gtinMsg(status.textContent); $('sefaz-pfx').focus(); return;
+  }
+  GtinBase.setBridgeToken(token);
+  button.disabled = true;
+  button.textContent = 'Conectando…';
+  status.textContent = file ? 'Enviando o certificado ao conector local…' : 'Verificando o conector local…';
+  gtinMsg(status.textContent);
+  try {
+    if (file) {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let binary = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      const res = await fetch('http://127.0.0.1:8787/api/certificate', {
+        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pfx: btoa(binary), passphrase: $('sefaz-password').value })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Falha ao carregar certificado');
+      $('sefaz-pfx').value = ''; $('sefaz-password').value = '';
+    }
+    const res = await fetch('http://127.0.0.1:8787/api/status', { headers: { Authorization: `Bearer ${token}` } });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Conector não autorizado');
+    status.textContent = data.certificate ? 'Conector conectado · certificado carregado' : 'Conector conectado · selecione o certificado';
+    gtinMsg('Conector SEFAZ local conectado. A senha e o arquivo não são gravados pelo navegador.');
+  } catch (e) {
+    const detail = e.name === 'TypeError'
+      ? 'Não foi possível acessar o conector local. Confirme que node sefaz-bridge/server.mjs está rodando e que SEFAZ_ALLOWED_ORIGINS corresponde exatamente à origem do site (somente https://domínio, sem caminho).'
+      : e.message;
+    status.textContent = detail;
+    gtinMsg(`<strong style="color:var(--red)">${escHtml(detail)}</strong>`);
+  } finally { button.disabled = false; button.textContent = 'Conectar'; }
+});
+$('gtin-import-btn').addEventListener('click', () => $('gtin-file').click());
+$('gtin-file').addEventListener('change', async e => {
+  const files = [...e.target.files];
+  e.target.value = '';
+  if (!files.length) return;
+  gtinMsg('<span class="cr-muted">Importando…</span>');
+  const r = await GtinBase.importFiles(files);
+  updateGtinCount();
+  gtinMsg(`${r.itens.toLocaleString('pt-BR')} item(ns) lidos de ${r.xmls} XML(s) e ${r.planilhas} planilha(s). Base com <strong>${r.total.toLocaleString('pt-BR')}</strong> GTINs.` +
+    (r.salvo ? '' : ' <strong style="color:var(--red)">Não foi possível gravar no navegador — a base vale só nesta sessão.</strong>') +
+    (r.erros.length ? `<br><span class="cr-muted">${r.erros.slice(0, 5).map(escHtml).join('<br>')}${r.erros.length > 5 ? `<br>… e mais ${r.erros.length - 5}` : ''}</span>` : ''));
+  if (lastInput && r.itens) refreshGtin('Base GTIN atualizada e planilha reclassificada.');
+});
+$('gtin-export-btn').addEventListener('click', () => {
+  if (!GtinBase.count()) { alert('A base GTIN está vazia.'); return; }
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(GtinBase.exportRows());
+  ws['!cols'] = [{ wch: 15 }, { wch: 12 }, { wch: 45 }, { wch: 9 }, { wch: 40 }, { wch: 40 }];
+  XLSX.utils.book_append_sheet(wb, ws, 'Base GTIN');
+  XLSX.writeFile(wb, 'base GTIN x NCM.xlsx');
+});
+$('gtin-clear-btn').addEventListener('click', () => {
+  if (!confirm('Apagar a base GTIN importada neste navegador?')) return;
+  GtinBase.clear(); updateGtinCount(); gtinMsg('Base GTIN apagada.');
+  if (lastInput) refreshGtin('Base GTIN apagada e planilha reclassificada.');
+});
+
+// Refaz a consulta GTIN (e a dos NCMs novos) com a planilha já carregada
+async function refreshGtin(note) {
+  if (!lastInput || !$('gtin-toggle').checked) return;
+  lastInput.gtinInfo = await GtinBase.lookupMany(GtinBase.collect(lastInput.rows), null, gtinLookupOptions());
+  if ($('api-toggle').checked) {
+    const prep = prepareRows();
+    const missing = [...ncmCodesOf(prep.finalRows)].filter(c => !lastInput.ncmInfo.has(c));
+    if (missing.length) for (const [c, i] of await NcmAPI.lookupMany(missing)) lastInput.ncmInfo.set(c, i);
+  }
+  runClassification();
+  $('actions-note').textContent = note;
+}
+
+function gtinLookupOptions() {
+  return { free: $('gtin-free-toggle').checked, sefaz: $('gtin-sefaz-toggle').checked };
+}
+
+// ── Consulta avulsa (NCM ou GTIN) ───────────────────────────────────
 async function consultNcm() {
   const raw = $('consult-input').value;
   const box = $('consult-result');
   const d = raw.replace(/\D/g, '');
-  if (d.length < 7 || d.length > 8) { box.hidden = false; box.innerHTML = '<span class="cr-muted">Digite um NCM de 8 dígitos.</span>'; return; }
-  const ncm = pad8(d);
   box.hidden = false;
+  if ([12, 13, 14].includes(d.length)) return consultGtin(d, box);
+  if (d.length < 7 || d.length > 8) { box.innerHTML = '<span class="cr-muted">Digite um NCM (8 dígitos) ou um GTIN (12 a 14 dígitos).</span>'; return; }
   box.innerHTML = '<span class="cr-muted">Consultando…</span>';
+  box.innerHTML = await ncmInfoHtml(pad8(d));
+}
+
+async function consultGtin(d, box) {
+  const p = gtinParse(d);
+  if (!p || !p.ok) { box.innerHTML = `<span class="inv" style="color:var(--red);font-weight:600">GTIN ${escHtml(d)}: ${escHtml(p ? p.motivo : 'inválido')}.</span>`; return; }
+  box.innerHTML = '<span class="cr-muted">Consultando GTIN…</span>';
+  const i = await GtinBase.lookup(p.gtin, Object.assign(gtinLookupOptions(), { input: d }));
+  const cm = GtinBase.mode();
+  let head = `<div><span class="cr-code">GTIN ${escHtml(fmtGtin(p.gtin))}</span> — `;
+  if (!i || !i.found || !i.ncm) {
+    head += i && i.found ? 'encontrado, mas sem NCM cadastrado.' : i && i.error ? 'consulta indisponível.' : 'não encontrado na base GTIN.';
+    box.innerHTML = head + (cm.msg ? ` <span class="cr-muted">${escHtml(cm.msg)}</span>` : '') +
+      '</div><div class="cr-muted">Na classificação, as linhas com este GTIN seguem com o NCM informado.</div>';
+    return;
+  }
+  head += `<span class="cr-desc">${escHtml(i.desc || '(sem descrição)')}</span> · fonte: ${escHtml(i.fonte)}` +
+          (i.cest ? ` · CEST ${escHtml(i.cest)}` : '') +
+          (i.conflito ? ` <strong style="color:var(--red)">· a base tem também ${i.conflito.map(fmtNcm).join(', ')}</strong>` : '') + '</div>';
+  box.innerHTML = head + await ncmInfoHtml(i.ncm);
+}
+
+async function ncmInfoHtml(ncm) {
   const rule = NCM_DB[ncm];
   const sug = rule ? null : suggestRule(ncm, NCM_DB);
   const api = await NcmAPI.lookup(ncm);
@@ -399,7 +569,7 @@ async function consultNcm() {
     ruleTxt = 'Não cadastrado no banco' + (sug && sug.conflito ? ` (grupo ${sug.base} tem regras diferentes)` : '') + '.';
   }
   const dr = DESC_RULES.filter(r => { try { return r.test(ncm, '', rule) || String(r.test).includes(`'${ncm}'`); } catch (e) { return false; } });
-  box.innerHTML = `<div><span class="cr-code">${fmtNcm(ncm)}</span> — ${apiTxt}</div>
+  return `<div><span class="cr-code">${fmtNcm(ncm)}</span> — ${apiTxt}</div>
     <div class="cr-rule">${ruleTxt}</div>
     ${dr.length ? `<div class="cr-muted">Este NCM tem regra por descrição do produto (${dr.map(r => r.id).join(', ')}).</div>` : ''}`;
 }
