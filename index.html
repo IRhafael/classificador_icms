@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Classificador ICMS PI</title>
 
-<script src="assets/vendor/xlsx.full.min.js"></script>
-<link rel="stylesheet" href="assets/styles.css">
+<script src="assets/vendor/xlsx.full.min.js?v=2026.11.06-3"></script>
+<link rel="stylesheet" href="assets/styles.css?v=2026.11.06-3">
 </head>
 <body>
 <div class="wrapper">
@@ -19,7 +19,8 @@
     </div>
     <div class="header-meta">
       Banco de NCMs: <strong id="db-count">0</strong> entradas<br>
-      Atualizado: <strong>11/2026</strong>
+      Tabela NCM: <strong id="ncm-updated">—</strong><br>
+      Versão: <strong>2026.11.06-3</strong>
     </div>
   </header>
 
@@ -44,7 +45,7 @@
       <button class="btn-link" id="gtin-clear-btn">Limpar base</button>
     </div>
     <div class="consult-row" style="flex-wrap:wrap;gap:8px;margin-top:8px">
-      <label class="api-toggle" style="margin:0"><input type="checkbox" id="gtin-free-toggle" checked> Consultar gratuitamente no PreçoMelhor os GTINs fora da base</label>
+      <label class="api-toggle" style="margin:0"><input type="checkbox" id="gtin-free-toggle"> Consultar o PreçoMelhor (gratuito, não oficial — NCM só como referência)</label>
       <label class="api-toggle" style="margin:0"><input type="checkbox" id="gtin-sefaz-toggle"> Consultar na SEFAZ pelo certificado</label>
     </div>
     <div class="consult-row" style="flex-wrap:wrap;gap:8px;margin-top:8px">
@@ -55,8 +56,7 @@
       <button class="btn-secondary" id="sefaz-connect" type="button">Conectar</button>
       <span id="sefaz-status" class="cr-muted">Conector local desconectado</span>
     </div>
-    <div class="gtin-attribution">Se clicar e nada mudar: confirme que o conector está rodando no terminal e que <code>SEFAZ_ALLOWED_ORIGINS</code> contém a origem exata desta página. “Conectar” apenas carrega o certificado; depois marque a opção acima e consulte um GTIN.</div>
-    <div class="gtin-attribution">A consulta SEFAZ usa o CCG oficial e exige certificado A1 válido de emitente NF-e/NFC-e. O conector local mantém o certificado somente na memória. O PreçoMelhor continua disponível como alternativa gratuita.</div>
+    <div class="gtin-attribution">SEFAZ: consulta oficial do CCG (só GTINs brasileiros 789/790), exige o conector local rodando e certificado A1 de emitente de NF-e/NFC-e — o certificado fica só na memória do conector. Ordem de consulta: base própria → SEFAZ → PreçoMelhor. Só a base própria (XML de entrada) e a SEFAZ trocam o NCM; o PreçoMelhor aparece apenas como referência. Respostas ficam guardadas por 30 dias.</div>
     <div id="gtin-msg" class="consult-result" hidden></div>
   </div>
 
@@ -64,13 +64,13 @@
   <div class="upload-card" id="drop-zone">
     <div class="upload-icon">📂</div>
     <div class="upload-label">Arraste a planilha ou clique para selecionar</div>
-    <div class="upload-hint">Arquivo .xlsx com as colunas NCM, DESCRIÇÃO, CFOP, CST, BASE DE CÁLCULO, ALIQ<br>
+    <div class="upload-hint">Arquivo .xlsx, .xls ou .csv com as colunas NCM, DESCRIÇÃO, CFOP, CST, BASE DE CÁLCULO, ALIQ<br>
     Opcionais: GTIN/EAN, ICMS, VALOR DO ITEM (ou QTD + VALOR UNITÁRIO), DESCONTO, FRETE, SEGURO, OUTRAS DESPESAS<br>
     As colunas VALOR DO ITEM (CALC.), BASE CORRETA, ALIQ CORRETA, ICMS CORRETO, OBSERVAÇÃO e STATUS são criadas automaticamente</div>
     <button class="btn-upload" onclick="document.getElementById('file-input').click()">Selecionar arquivo</button>
-    <input type="file" id="file-input" accept=".xlsx,.xls">
+    <input type="file" id="file-input" accept=".xlsx,.xls,.csv">
     <label class="api-toggle"><input type="checkbox" id="gtin-toggle" checked> Validar o NCM pelo GTIN primeiro (sem GTIN na base, usa o NCM informado)</label>
-    <label class="api-toggle"><input type="checkbox" id="api-toggle" checked> Validar NCMs na tabela oficial local (Siscomex)</label>
+    <label class="api-toggle"><input type="checkbox" id="api-toggle" checked> Validar NCMs na tabela oficial (Siscomex, consulta local)</label>
   </div>
 
   <!-- Progress (hidden until processing) -->
@@ -97,6 +97,7 @@
     <div class="api-status" id="api-status"></div>
     <div class="api-status" id="gtin-status" hidden></div>
     <div class="parse-notes" id="parse-notes" hidden></div>
+    <div class="api-status" id="cols-status"></div>
 
     <div class="table-wrap" id="ncm-review-wrap" hidden>
       <div class="table-head">
@@ -155,14 +156,14 @@
 
 </div>
 
-<script src="assets/js/database.js"></script>
-<script src="assets/js/ncm-rules.js"></script>
-<script src="assets/js/classification.js"></script>
-<script src="assets/js/ncm-normalizer.js"></script>
-<script src="assets/js/ncm-data.js"></script>
-<script src="assets/js/ncm-api.js"></script>
-<script src="assets/js/gtin-data.js"></script>
-<script src="assets/js/gtin.js"></script>
-<script src="assets/js/app.js"></script>
+<script src="assets/js/database.js?v=2026.11.06-3"></script>
+<script src="assets/js/ncm-rules.js?v=2026.11.06-3"></script>
+<script src="assets/js/classification.js?v=2026.11.06-3"></script>
+<script src="assets/js/ncm-normalizer.js?v=2026.11.06-3"></script>
+<script src="assets/js/ncm-data.js?v=2026.11.06-3"></script>
+<script src="assets/js/ncm-api.js?v=2026.11.06-3"></script>
+<script src="assets/js/gtin-data.js?v=2026.11.06-3"></script>
+<script src="assets/js/gtin.js?v=2026.11.06-3"></script>
+<script src="assets/js/app.js?v=2026.11.06-3"></script>
 </body>
 </html>

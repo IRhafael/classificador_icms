@@ -24,6 +24,7 @@ let lastInput = null;      // { rows, sheetName, fileName, ncmInfo }
 const $ = id => document.getElementById(id);
 function updateDbCount() { $('db-count').textContent = Object.keys(NCM_DB).length.toLocaleString('pt-BR'); }
 updateDbCount();
+$('ncm-updated').textContent = String(window.NCM_OFFICIAL_UPDATED_AT || 'data não informada').replace(/^Vigente em\s*/i, '');
 
 try { const v = localStorage.getItem('ncm_api_on'); if (v === '0') $('api-toggle').checked = false; } catch (e) {}
 $('api-toggle').addEventListener('change', e => { try { localStorage.setItem('ncm_api_on', e.target.checked ? '1' : '0'); } catch (x) {} });
@@ -41,8 +42,8 @@ dropZone.addEventListener('drop', e => {
   e.preventDefault();
   dropZone.classList.remove('drag-over');
   const file = e.dataTransfer.files[0];
-  if (file && /\.xlsx?$/i.test(file.name)) processFile(file);
-  else alert('Por favor, selecione um arquivo .xlsx');
+  if (file && /\.(xlsx|xls|csv)$/i.test(file.name)) processFile(file);
+  else alert('Selecione uma planilha .xlsx, .xls ou .csv');
 });
 fileInput.addEventListener('change', () => { if (fileInput.files[0]) processFile(fileInput.files[0]); });
 $('btn-reset').addEventListener('click', () => {
@@ -114,7 +115,7 @@ function processFile(file) {
 function ncmCodesOf(rows) {
   const out = new Set(), h = findHeader(rows);
   if (h < 0) { for (const r of rows) for (const v of (r || [])) if (/^\d{7,8}$/.test(String(v || '').trim())) out.add(pad8(v)); return out; }
-  const C = mapColumns(rows[h]);
+  const C = columnsOf(rows, h);
   for (let r = h + 1; r < rows.length; r++) for (const i of [C.NCM, C.NCM_ORIG]) {
     const v = i != null && rows[r] ? rows[r][i] : null;
     if (v != null && String(v).replace(/\D/g, '')) out.add(pad8(v));
@@ -131,18 +132,25 @@ function prepareRows() {
     const d = gtinDecision(raw, desc, gtinInfo, g.shared);
     return d.situacao === 'ok' ? { ncm: d.ncm, fonte: d.fonte } : null;
   };
-  const review = NcmNormalizer.analyze(g.rows, { check: checkNcmCoherence, gtinNcm });
-  return { gtinRows: g.rows, finalRows: NcmNormalizer.apply(g.rows), shared: g.shared, review };
+  const gtinProduct = raw => {
+    if (!gtinInfo) return null;
+    const p = gtinParse(raw);
+    const info = p && p.ok ? gtinInfo.get(p.gtin) : null;
+    return info && info.desc ? { desc: info.desc, fonte: info.fonte || 'GTIN' } : null;
+  };
+  const review = NcmNormalizer.analyze(g.rows, { check: checkNcmCoherence, gtinNcm, gtinProduct });
+  const isConfirmed = (cod, desc, ncm, gtin) => NcmNormalizer.isConfirmed(cod, desc, ncm, gtin, gtinProduct);
+  return { gtinRows: g.rows, finalRows: NcmNormalizer.apply(g.rows, { gtinProduct }), shared: g.shared, review, isConfirmed };
 }
 
 function runClassification() {
   const { sheetName, fileName, ncmInfo, gtinInfo } = lastInput;
   const prep = prepareRows();
-  const res = classifyRows(prep.finalRows, ncmInfo, NCM_DB, { isConfirmed: NcmNormalizer.isConfirmed, gtinInfo, gtinShared: prep.shared });
+  const res = classifyRows(prep.finalRows, ncmInfo, NCM_DB, { isConfirmed: prep.isConfirmed, gtinInfo, gtinShared: prep.shared });
   const review = prep.review.map(p => Object.assign(p, { impacto: reviewImpact(p) }));
   setProgress(85, 'Gerando arquivo…');
   resultWorkbook = buildWorkbook(res, sheetName, review);
-  resultFileName = fileName.replace(/\.xlsx?$/i, '') + ' - classificado.xlsx';
+  resultFileName = fileName.replace(/\.(xlsx|xls|csv)$/i, '') + ' - classificado.xlsx';
   renderResults(res, ncmInfo);
   renderNcmReview(review);
   setProgress(100, 'Concluído!');
@@ -210,7 +218,8 @@ function renderNcmReview(products) {
     const sugDesc = p.suggestion ? offDesc(pad8(p.suggestion)) : '';
     tr.innerHTML = `
       <td class="ncm-cell">${escHtml(p.sku)}</td>
-      <td>${escHtml(p.description)}<span class="motivo">${p.motivos.map(escHtml).join('<br>')}</span></td>
+      <td>${escHtml(p.descriptionSheet || p.sku)}${p.descriptionGtin && p.descriptionGtin.length ? p.descriptionGtin.map(d =>
+        `<span class="off-desc">Descrição no ${escHtml(d.fonte)}: ${escHtml(d.desc)}</span>`).join('') : ''}<span class="motivo">${p.motivos.map(escHtml).join('<br>')}</span></td>
       <td>${ncms}</td>
       <td class="imp-cell">${impHtml}</td>
       <td><input class="ncm-input ncm-normalized-input" type="text" inputmode="numeric" maxlength="10" placeholder="8 dígitos"
@@ -287,7 +296,7 @@ function buildWorkbook(res, sheetName, review) {
   if (res.gtinReport && res.gtinReport.length) {
     const SIT = { ok: 'NCM do GTIN aplicado', 'sem-base': 'Sem cadastro — usado NCM informado', 'sem-ncm': 'GTIN sem NCM — usado NCM informado',
                   compartilhado: 'Não aplicado — GTIN usado p/ produtos diferentes', 'desc-diverge': 'Não aplicado — descrição não confere',
-                  invalido: 'GTIN inválido', interno: 'GTIN interno (balança/loja)' };
+                  invalido: 'GTIN inválido', interno: 'GTIN interno (balança/loja)', referencia: 'Só referência — PreçoMelhor não é oficial' };
     const head = ['GTIN', 'DESCRIÇÃO NA PLANILHA', 'NCM INFORMADO', 'NCM DO GTIN', 'CONFERE?', 'DESCRIÇÃO NA BASE GTIN', 'FONTE', 'SITUAÇÃO', 'LINHAS', 'OBSERVAÇÃO'];
     const lines = res.gtinReport.map(r => {
       const inf = [...r.ncmInf];
@@ -322,6 +331,12 @@ function renderResults(res, ncmInfo) {
   const avisos = [];
   if (s.isCsosn) avisos.push('Coluna CST lida como CSOSN (Simples Nacional): conferido o enquadramento ST/isento/tributado, sem alíquota.');
   if (s.aliqFator === 100) avisos.push('Alíquotas vieram como fração (ex.: 0,225) e foram lidas como percentual (22,5%).');
+  const C = res.cols, head = res.rows[0];
+  const PAPEIS = [['COD', 'Código'], ['DESC', 'Descrição'], ['GTIN', 'GTIN'], ['NCM', 'NCM'], ['CFOP', 'CFOP'], ['CST', s.isCsosn ? 'CSOSN' : 'CST'],
+                  ['VALOR', 'Valor'], ['BASE', 'Base'], ['ALIQ', 'Alíquota'], ['ICMS', 'ICMS']];
+  $('cols-status').textContent = 'Colunas lidas — ' + PAPEIS.filter(([r]) => C[r] != null).map(([r, n]) => `${n}: “${head[C[r]]}”`).join(' · ');
+  const faltam = PAPEIS.filter(([r]) => C[r] == null && ['DESC', 'CFOP', 'CST', 'ALIQ'].includes(r)).map(([, n]) => n);
+  if (faltam.length) avisos.push(`Coluna(s) não encontrada(s): ${faltam.join(', ')} — confira os títulos da planilha.`);
   $('parse-notes').textContent = avisos.join(' ');
   $('parse-notes').hidden = !avisos.length;
   const newCount = Object.keys(res.newNCMs).length;
@@ -329,13 +344,13 @@ function renderResults(res, ncmInfo) {
   $('t-gtin').textContent = fmt(s.gtinConfirmado + s.gtinCorrigido);
   $('t-gtin-sub').textContent = s.temGtin
     ? [s.gtinCorrigido ? `${fmt(s.gtinCorrigido)} corrigidas` : '', s.gtinSemBase ? `${fmt(s.gtinSemBase)} sem cadastro` : '',
-       s.gtinNaoAplicado ? `${fmt(s.gtinNaoAplicado)} não aplicadas` : '', s.gtinInvalido ? `${fmt(s.gtinInvalido)} GTIN inválido` : ''].filter(Boolean).join(' · ')
+       s.gtinNaoAplicado ? `${fmt(s.gtinNaoAplicado)} não aplicadas` : '', s.gtinReferencia ? `${fmt(s.gtinReferencia)} só referência (PreçoMelhor)` : '', s.gtinInvalido ? `${fmt(s.gtinInvalido)} GTIN inválido` : ''].filter(Boolean).join(' · ')
     : ($('gtin-toggle').checked ? 'planilha sem coluna GTIN' : 'consulta GTIN desligada');
   const gs = $('gtin-status');
   if (s.temGtin) {
     const cm = GtinBase.mode();
     gs.textContent = `GTIN (prioritário): ${fmt(s.gtinConfirmado)} linha(s) com NCM confirmado e ${fmt(s.gtinCorrigido)} corrigida(s) pelo GTIN; ` +
-      `${fmt(s.gtinSemBase + s.semGtin)} seguiram com o NCM informado (sem GTIN ou sem cadastro).` + (cm.msg ? ' ' + cm.msg : '');
+      `${fmt(s.gtinSemBase + s.semGtin + s.gtinReferencia)} seguiram com o NCM informado (sem GTIN, sem cadastro oficial ou só com referência do PreçoMelhor).` + (cm.msg ? ' ' + cm.msg : '');
     gs.className = 'api-status ' + (cm.sefaz === 'erro' || cm.free === 'erro' ? 'off' : 'ok');
     gs.hidden = false;
   } else gs.hidden = true;
@@ -343,16 +358,12 @@ function renderResults(res, ncmInfo) {
   const mode = $('api-toggle').checked ? NcmAPI.mode() : 'desligada';
   const st = $('api-status');
   const msgs = {
-    local: `Tabela NCM oficial do Siscomex consultada localmente (${window.NCM_OFFICIAL_UPDATED_AT || 'data de atualização não informada'}).`,
-    tabela: 'Tabela NCM oficial consultada — NCMs inexistentes ou extintos foram sinalizados.',
-    cache: 'NCMs validados com a tabela oficial (cache local de até 30 dias).',
-    individual: 'NCMs consultados um a um na BrasilAPI (descrição sem hierarquia).',
-    parcial: 'Consulta NCM parcial — parte dos códigos não respondeu; esses não foram validados.',
-    offline: 'Consulta NCM indisponível (sem internet ou API fora do ar) — classificação feita só com o banco local.',
+    local: `Tabela NCM oficial do Siscomex consultada localmente (${window.NCM_OFFICIAL_UPDATED_AT || 'data de atualização não informada'}) — NCMs inexistentes ou extintos foram sinalizados.`,
+    offline: 'Tabela NCM oficial não carregada (arquivo assets/js/ncm-data.js ausente) — classificação feita só com o banco de regras.',
     desligada: 'Validação na tabela oficial desligada.',
   };
   st.textContent = msgs[mode] || '';
-  st.className = 'api-status ' + (['local', 'tabela', 'cache', 'individual'].includes(mode) ? 'ok' : 'off');
+  st.className = 'api-status ' + (mode === 'local' ? 'ok' : 'off');
 
   $('actions-note').textContent = newCount > 0
     ? `⚠️ ${newCount} NCM(s) novo(s) — revise a tabela abaixo`
@@ -455,7 +466,7 @@ $('sefaz-connect').addEventListener('click', async () => {
       const bytes = new Uint8Array(await file.arrayBuffer());
       let binary = '';
       for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-      const res = await fetch('http://127.0.0.1:8787/api/certificate', {
+      const res = await fetch(GtinBase.bridgeUrl + '/api/certificate', {
         method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ pfx: btoa(binary), passphrase: $('sefaz-password').value })
       });
@@ -463,14 +474,18 @@ $('sefaz-connect').addEventListener('click', async () => {
       if (!res.ok) throw new Error(data.error || 'Falha ao carregar certificado');
       $('sefaz-pfx').value = ''; $('sefaz-password').value = '';
     }
-    const res = await fetch('http://127.0.0.1:8787/api/status', { headers: { Authorization: `Bearer ${token}` } });
+    const res = await fetch(GtinBase.bridgeUrl + '/api/status', { headers: { Authorization: `Bearer ${token}` } });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Conector não autorizado');
     status.textContent = data.certificate ? 'Conector conectado · certificado carregado' : 'Conector conectado · selecione o certificado';
-    gtinMsg('Conector SEFAZ local conectado. A senha e o arquivo não são gravados pelo navegador.');
+    if (data.certificate && !$('gtin-sefaz-toggle').checked) {
+      $('gtin-sefaz-toggle').checked = true;
+      try { localStorage.setItem('gtin_sefaz_on', '1'); } catch (x) {}
+    }
+    gtinMsg('Conector SEFAZ local conectado' + (data.certificate ? ' — consulta SEFAZ ativada.' : '.') + ' A senha e o arquivo não são gravados pelo navegador.');
   } catch (e) {
     const detail = e.name === 'TypeError'
-      ? 'Não foi possível acessar o conector local. Confirme que node sefaz-bridge/server.mjs está rodando e que SEFAZ_ALLOWED_ORIGINS corresponde exatamente à origem do site (somente https://domínio, sem caminho).'
+      ? `Não foi possível acessar o conector local. Confirme que node sefaz-bridge/server.mjs está rodando e que SEFAZ_ALLOWED_ORIGINS contém ${location.protocol === 'file:' ? 'null (página aberta do disco)' : location.origin}.`
       : e.message;
     status.textContent = detail;
     gtinMsg(`<strong style="color:var(--red)">${escHtml(detail)}</strong>`);
@@ -556,7 +571,7 @@ async function ncmInfoHtml(ncm) {
   const sug = rule ? null : suggestRule(ncm, NCM_DB);
   const api = await NcmAPI.lookup(ncm);
   let apiTxt;
-  if (api.error) apiTxt = '<span class="cr-muted">Tabela oficial indisponível no momento (sem internet ou API fora do ar).</span>';
+  if (api.error) apiTxt = '<span class="cr-muted">Tabela NCM oficial não carregada (assets/js/ncm-data.js).</span>';
   else if (!api.found) apiTxt = '<span class="inv" style="color:var(--red);font-weight:600">NCM não existe na tabela NCM oficial.</span>';
   else apiTxt = `<span class="cr-desc">${escHtml(api.desc)}</span>${api.expired ? ` <strong style="color:var(--red)">· extinto em ${escHtml(api.fim)}</strong>` : ''}`;
   let ruleTxt;

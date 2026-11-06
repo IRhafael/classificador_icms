@@ -14,12 +14,14 @@ const cst2 = c => {
 };
 const normTxt = s => String(s == null ? '' : s).toUpperCase().trim()
   .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ');
+// Aceita "1.234,56", "1234.56", "R$ 10,00", "22,5%". Vírgula depois do último ponto = decimal BR.
 const num = v => {
   if (v == null || v === '') return 0;
-  if (typeof v === 'number') return v;
-  const s = String(v).trim();
-  // aceita "1.234,56" e "1234.56"
-  const n = /,\d{1,4}$/.test(s) ? parseFloat(s.replace(/\./g, '').replace(',', '.')) : parseFloat(s);
+  if (typeof v === 'number') return isFinite(v) ? v : 0;
+  let s = String(v).trim().replace(/[^\d,.\-]/g, '');
+  if (s.includes(',') && s.lastIndexOf(',') > s.lastIndexOf('.')) s = s.replace(/\./g, '').replace(',', '.');
+  else s = s.replace(/,/g, '');
+  const n = parseFloat(s);
   return isNaN(n) ? 0 : n;
 };
 const r2 = v => Math.round((v + Number.EPSILON) * 100) / 100;
@@ -62,7 +64,7 @@ function descCompat(a, b) {
 // Decide se o NCM do GTIN vale para a linha.
 //   info: resultado da consulta (Map gtin14 → {found, ncm, desc, fonte})
 //   shared: Set de GTINs usados na planilha para produtos diferentes
-// situacao: sem-gtin | invalido | interno | sem-base | sem-ncm | compartilhado | desc-diverge | ok
+// situacao: sem-gtin | invalido | interno | sem-base | sem-ncm | referencia | compartilhado | desc-diverge | ok
 function gtinDecision(rawGtin, desc, info, shared) {
   const p = gtinParse(rawGtin);
   if (!p) return { situacao: 'sem-gtin' };
@@ -72,6 +74,8 @@ function gtinDecision(rawGtin, desc, info, shared) {
   if (!i.found) return { situacao: 'sem-base', gtin: p.gtin, motivo: 'GTIN não encontrado na base' };
   if (!i.ncm) return { situacao: 'sem-ncm', gtin: p.gtin, fonte: i.fonte, motivo: 'GTIN encontrado sem NCM cadastrado' };
   const base = { gtin: p.gtin, ncm: pad8(i.ncm), fonte: i.fonte || 'base GTIN', descGtin: i.desc || '', conflito: i.conflito || null };
+  // PreçoMelhor é cadastro colaborativo (erra com frequência): só referência, nunca troca o NCM
+  if (i.viaFree) return Object.assign(base, { situacao: 'referencia', motivo: 'NCM do PreçoMelhor (cadastro não oficial) — só referência' });
   if (shared && shared.has(p.gtin)) return Object.assign(base, { situacao: 'compartilhado', motivo: 'mesmo GTIN usado para produtos diferentes na planilha' });
   if (i.desc && desc && !descCompat(desc, i.desc)) return Object.assign(base, { situacao: 'desc-diverge', motivo: `descrição do GTIN ("${String(i.desc).slice(0, 50)}") não confere com o produto` });
   return Object.assign(base, { situacao: 'ok' });
@@ -263,7 +267,11 @@ function suggestRule(ncm, db) {
 }
 
 // ── Detecção de colunas pelo cabeçalho ──────────────────────────────
-// Cada coluna recebe no máximo um papel; a ordem define a prioridade.
+// Cada coluna recebe no máximo um papel (o primeiro da lista que casar).
+// Quando várias colunas servem ao mesmo papel, vence a de maior pontuação
+// (COL_PREF + conteúdo); no empate, a primeira da planilha.
+// Termos que indicam outro tributo ou outro campo do ICMS:
+const NAO_ICMS_PROPRIO = /\bST\b|RET|FCP|DESON|DIFAL|DIFER|\bIBS\b|\bCBS\b|\bPIS\b|COFINS|\bIPI\b|\bISS\b|\bII\b|SIMPLES|CREDITO|MODALIDADE|MOTIVO|REDUC|SUBSTITUTO|PROPRIO DO|\bUF\b|DESTINO|INTER|MVA|APROX/;
 const COL_RULES = [
   ['BASE_C',   h => /BASE.*CORRET/.test(h)],
   ['ALIQ_C',   h => /AL[I]Q.*CORRET/.test(h)],
@@ -272,7 +280,7 @@ const COL_RULES = [
   ['NCM_DESC', h => /DESCRI.*NCM|NCM.*(OFICIAL|TIPI)/.test(h)],
   ['OBS',      h => /^OBS|OBSERV/.test(h)],
   ['STATUS',   h => /^STATUS$/.test(h)],
-  ['NITENS',   h => /^N.? ?(DE )?ITENS|^QTD\.? LINHAS/.test(h)],
+  ['NITENS',   h => /^N.? ?(DE )?(ITENS|LINHAS)$|^QTD\.? LINHAS/.test(h)],
   ['NCM_ORIG', h => /^NCM\s+(INFORMADO|ORIGINAL)$/.test(h)],
   ['NCM_SUG',  h => /^NCM\s+SUGERIDO/.test(h)],
   ['NCM_GTIN', h => /^NCM\s+(DO\s+|PELO\s+)?GTIN/.test(h)],
@@ -281,32 +289,76 @@ const COL_RULES = [
   ['GTIN',     h => /GTIN|\bEAN\b|\bCEAN\b|COD(IGO)?\.?\s*(DE\s+)?BARRAS?\b|^BARRAS$/.test(h) && !/TRIB/.test(h)],
   ['NCM',      h => /\bNCM\b/.test(h)],
   ['CFOP',     h => /\bCFOP\b/.test(h)],
-  ['CST',      h => /\bCST\b|\bCSOSN\b|SIT.*TRIB/.test(h) && !/PIS|COFINS|IPI/.test(h)],
-  ['ALIQ',     h => /AL[I]Q/.test(h) && !/\bST\b|PIS|COFINS|IPI|FCP/.test(h)],
-  ['BASE',     h => (/BASE.*(CAL|ICMS|TRIB)|^BASE$|^BC\b|VALOR.?BASE|VL.?BC/.test(h)) && !/\bST\b|RET|FCP/.test(h)],
-  ['ICMS',     h => /\bICMS\b/.test(h) && !/\bST\b|RET|FCP|DESON/.test(h)],
+  ['CST',      h => /\bCST\b|\bCSOSN\b|SIT.*TRIB/.test(h) && !/PIS|COFINS|IPI|\bIBS\b|\bCBS\b/.test(h)],
+  ['ALIQ',     h => /AL[I]Q/.test(h) && !NAO_ICMS_PROPRIO.test(h)],
+  ['BASE',     h => (/BASE.*(CAL|ICMS|TRIB)|^BASE$|^BC\b|VALOR.?BASE|VL.?BC/.test(h)) && !NAO_ICMS_PROPRIO.test(h)],
+  ['ICMS',     h => /\bICMS\b/.test(h) && !NAO_ICMS_PROPRIO.test(h) && !/AL[I]Q|BASE|%/.test(h)],
   ['DESC_V',   h => /DESCONTO|^VL?\.? ?DESC\.?$|^DESC\.?$/.test(h)],
   ['FRETE',    h => /FRETE/.test(h) && !/MOD|TIPO|TRANSP/.test(h)],
   ['SEGURO',   h => /SEGURO/.test(h)],
   ['OUTRAS',   h => /OUTRAS?\s*(DESP|ACESS)|DESP.*ACESS|^VL?\.?\s*OUTR/.test(h)],
-  ['VUNIT',    h => /UNIT/.test(h) && /VAL|VL|PRECO|PRC/.test(h)],
-  ['QTD',      h => /^QTD|^QTDE|^QUANT|^QTE\b/.test(h) && !/LINHA/.test(h)],
-  ['VALOR',    h => /^(VALOR|VL\.?|VLR\.?)\s*(TOTAL|DO PRODUTO|PRODUTO|DO ITEM|ITEM|MERC|CONTABIL|DA OPERACAO|OPERACAO|LIQ)|^TOTAL$|^VALOR$/.test(h)],
-  ['COD',      h => /^COD|^CODIGO|^REF\b|^REFERENCIA|^SKU|^ID\b/.test(h)],
-  ['DESC',     h => /DESCRI|PRODUTO|MERCADORIA|^NOME|^ITEM$/.test(h)],
+  ['VUNIT',    h => /UNIT/.test(h) && /VAL|VL|PRECO|PRC/.test(h) && !/TRIB/.test(h)],
+  ['QTD',      h => /^QTD|^QTDE|^QUANT|^QTE\b/.test(h) && !/LINHA|TRIB/.test(h)],
+  ['VALOR',    h => /^(VALOR|VL\.?|VLR\.?)\s*(TOTAL|DO PRODUTO|PRODUTO|DO ITEM|ITEM|MERC|CONTABIL|DA OPERACAO|OPERACAO|LIQ)|^TOTAL$|^VALOR$|^VPROD$/.test(h) && !/APROX|TRIB/.test(h)],
+  ['COD',      h => /^COD|^CODIGO|^CPROD$|^REF\b|^REFERENCIA|^SKU|^ID\b/.test(h) && !/BENEF|CLIENTE|PARTIC|FORNEC|EMIT|DEST|ENQUADR|MUNIC|IBGE|VEND|CFOP|NCM|CEST|CCLASS/.test(h)],
+  ['DESC',     h => /DESCRI|PRODUTO|MERCADORIA|^NOME|^ITEM$|^XPROD$/.test(h) && !/CFOP|OPERACAO|NATUREZA|UNIDADE|CLIENTE|EMIT|DEST/.test(h)],
 ];
+const COL_PREF = {
+  DESC: h => /^(DESCRICAO|DESCR\.?|DESCRICAO DO (PRODUTO|ITEM)|DESCRICAO DA MERCADORIA|DESC\.? PRODUTO|XPROD|NOME DO PRODUTO)$/.test(h) ? 3 : /DESCRI/.test(h) ? 2 : /^ITEM$/.test(h) ? -2 : 0,
+  COD:  h => /PROD|ITEM|MERC|SKU|^COD(IGO)?\.?$/.test(h) ? 2 : 0,
+  ICMS: h => /^(ICMS|VALOR (DO )?ICMS|VL\.? ?(DO )?ICMS|VLR\.? ?ICMS)$/.test(h) ? 3 : 0,
+  ALIQ: h => /ICMS/.test(h) ? 2 : 0,
+  BASE: h => /ICMS/.test(h) ? 2 : 0,
+  CST:  h => /ICMS|^CST$|^CSOSN$/.test(h) ? 2 : 0,
+};
+const temLetras = v => /[A-Za-zÀ-ú]{3}/.test(String(v == null ? '' : v));
+function textoRatio(sample, ci) {
+  const vals = sample.map(r => (r || [])[ci]).filter(v => v != null && String(v).trim() !== '');
+  return vals.length ? vals.filter(temLetras).length / vals.length : 0;
+}
 
-function mapColumns(header) {
-  const idx = {};
+// header: linha de cabeçalho. sample (opcional): linhas de dados, usadas para
+// conferir pelo conteúdo (ex.: "Item" com 1, 2, 3 não é descrição).
+function mapColumns(header, sample) {
+  sample = sample || [];
+  const cand = {};
   header.forEach((cell, ci) => {
     const h = normTxt(cell);
     if (!h) return;
-    for (const [role, test] of COL_RULES) {
-      if (test(h)) { if (!(role in idx)) idx[role] = ci; return; }
-    }
+    for (const [role, test] of COL_RULES) if (test(h)) { (cand[role] = cand[role] || []).push({ ci, h }); return; }
   });
+  const idx = {}, descNumerica = [];
+  for (const [role, list] of Object.entries(cand)) {
+    let best = null, bestScore = -Infinity;
+    for (const c of list) {
+      let score = COL_PREF[role] ? COL_PREF[role](c.h) : 0;
+      if (role === 'DESC' && sample.length) {
+        const t = textoRatio(sample, c.ci);
+        if (t < 0.5) { score = -100; if (/PROD|MERC/.test(c.h)) descNumerica.push(c.ci); } else score += t * 2;
+      }
+      if (score > bestScore) { best = c; bestScore = score; }
+    }
+    if (best && bestScore > -100) idx[role] = best.ci;
+  }
+  // "PRODUTO" com números é o código do produto
+  if (idx.COD == null && descNumerica.length) idx.COD = descNumerica[0];
+  // Sem coluna de descrição pelo título: usa a coluna de texto mais variada que não seja de outro tipo
+  if (idx.DESC == null && sample.length) {
+    const usadas = new Set(Object.values(idx));
+    let best = -1, bestN = 4;
+    header.forEach((cell, ci) => {
+      const h = normTxt(cell);
+      if (usadas.has(ci) || /EMIT|DEST|CLIENTE|FORNEC|RAZAO|FANTASIA|MUNIC|CIDADE|\bUF\b|NATUREZA|UNID|TIPO|OBS|CHAVE|SERIE|DATA|STATUS|SITUAC|INF|MOTIVO|CONTRIB|VENDEDOR|OPERADOR/.test(h)) return;
+      if (textoRatio(sample, ci) < 0.8) return;
+      const n = new Set(sample.map(r => normTxt((r || [])[ci])).filter(Boolean)).size;
+      if (n > bestN) { bestN = n; best = ci; }
+    });
+    if (best >= 0) idx.DESC = best;
+  }
   return idx;
 }
+// Atalho: colunas a partir da linha de cabeçalho h, conferindo até 300 linhas de dados
+const columnsOf = (rows, h) => mapColumns(rows[h] || [], rows.slice(h + 1, h + 301));
 
 // Inferência pelo conteúdo quando não há cabeçalho reconhecível
 function inferHeader(rows) {
@@ -366,7 +418,33 @@ function avaliarSimples(rule, decl) {
 }
 
 // ── Avaliação de uma linha ──────────────────────────────────────────
-function avaliarLinha(rule, decl, opts) {
+// Saída interestadual do PI: 12% (4% para importados — Res. SF 13/2012).
+// A regra do banco é interna; aqui só a alíquota interestadual é conferida.
+function avaliarForaDoEstado(rule, decl, cfop, vi) {
+  const ruleCst = cst2(rule.cst), declCst = cst2(decl.cst);
+  const gR = cstGroup(ruleCst), gD = cstGroup(declCst);
+  const icmsDecl = decl.icms != null ? decl.icms : r2(decl.base * decl.aliq / 100);
+  const out = { base: 0, aliq: '', icms: 0, dif: null, baseFaltando: true, baseFonte: '', erros: [], revisar: [], icmsDecl, valorItem: vi.valor };
+  if (/^6/.test(cfop)) {
+    if (gR === 'TRIB' && gD === 'TRIB' && ruleCst !== '20') {
+      const aliqInter = Math.abs(decl.aliq - 4) < 0.01 ? 4 : 12;
+      out.base = r2(vi.valor > 0 ? vi.valor : decl.base);
+      out.baseFaltando = !(out.base > 0);
+      out.aliq = aliqInter;
+      out.icms = r2(out.base * aliqInter / 100);
+      if (!out.baseFaltando) out.dif = r2(out.icms - icmsDecl);
+      if (vi.valor > 0 && Math.abs(vi.valor - decl.base) > 0.01) out.baseFonte = vi.fonte;
+      if (Math.abs(decl.aliq - aliqInter) > 0.01) out.erros.push(`alíquota ${decl.aliq}% informada; saída interestadual do PI: 12% (4% p/ importados)`);
+    }
+    out.revisar.push(`CFOP ${cfop} interestadual — regra interna não aplicada` +
+      (gR && gD && gR !== gD ? `; CST ${declCst} informado, regra interna prevê CST ${ruleCst} (${GROUP_LABEL[gR]})` : '') +
+      `; conferir CST, benefício${gR === 'ST' ? ', ST por convênio/protocolo' : ''} e DIFAL`);
+  } else if (/^7/.test(cfop)) out.revisar.push(`CFOP ${cfop} exportação — não incidência (CST 41); regra interna não aplicada`);
+  else out.revisar.push(`CFOP ${cfop} é de entrada — o classificador confere saídas`);
+  return out;
+}
+
+function avaliarLinha(rule, decl) {
   const ruleCst = cst2(rule.cst);
   const declCst = cst2(decl.cst);
   const gR = cstGroup(ruleCst), gD = cstGroup(declCst);
@@ -374,10 +452,10 @@ function avaliarLinha(rule, decl, opts) {
   const aliqEf = rule.aliq;
   const aliqNom = rule.aliq_nominal || (isRed ? 12 : aliqEf);
   const cfop = String(decl.cfop || '').replace(/\D/g, '');
-  const interestadual = /^6/.test(cfop);
   // Valor do item (líquido de desconto + despesas acessórias) é a base de partida;
   // a base declarada só é usada quando a planilha não traz valor.
   const vi = decl.valorItem != null ? decl.valorItem : valorDoItem(decl);
+  if (/^[12367]/.test(cfop)) return avaliarForaDoEstado(rule, decl, cfop, vi);
   const valorLiq = vi.valor;
 
   // Base e ICMS corretos
@@ -407,9 +485,7 @@ function avaliarLinha(rule, decl, opts) {
   } else if (!gD) {
     revisar.push('CST não informado');
   }
-  if (interestadual) {
-    revisar.push(`CFOP ${cfop} interestadual — alíquota interna não se aplica; conferir 4%/7%/12%`);
-  } else if (gR === 'TRIB' && gD === 'TRIB') {
+  if (gR === 'TRIB' && gD === 'TRIB') {
     if (isRed) {
       if (Math.abs(decl.aliq - aliqNom) > 0.01) erros.push(`alíquota ${decl.aliq}% informada; esperado ${aliqNom}% com base reduzida (carga ${aliqEf}%)`);
       if (declCst !== '20') erros.push(`CST ${declCst} sem redução; regra prevê CST 20 (carga efetiva ${aliqEf}%)`);
@@ -429,7 +505,7 @@ function avaliarLinha(rule, decl, opts) {
 
 // ── Classificação completa ──────────────────────────────────────────
 // rowsIn: matriz (sheet_to_json header:1). ncmInfo: Map ncm -> {found, expired, desc}
-// opts.isConfirmed(cod, desc, ncm): true quando o usuário já confirmou o NCM
+// opts.isConfirmed(cod, desc, ncm, gtin): true quando o usuário já confirmou o NCM
 // daquele produto na revisão (suprime o aviso de NCM suspeito).
 function classifyRows(rowsIn, ncmInfo, db, opts) {
   db = db || NCM_DB;
@@ -437,12 +513,11 @@ function classifyRows(rowsIn, ncmInfo, db, opts) {
   opts = opts || {};
   let rows = rowsIn.map(r => (r || []).slice());
 
-  let hIdx = findHeader(rows);
-  let headerInserted = false;
-  if (hIdx < 0) { rows.unshift(inferHeader(rows)); hIdx = 0; headerInserted = true; }
+  const hIdx = findHeader(rows);
+  if (hIdx < 0) rows.unshift(inferHeader(rows));
   else if (hIdx > 0) rows = rows.slice(hIdx);
   const header = rows[0].map(h => h == null ? '' : h);
-  const C = mapColumns(header);
+  const C = mapColumns(header, rows.slice(1, 301));
   if (C.NCM == null) throw new Error('Coluna NCM não encontrada. Verifique se a planilha contém NCMs de 7-8 dígitos.');
 
   const temGtin = C.GTIN != null && !!opts.gtinInfo;   // opts.gtinInfo = null → consulta GTIN desligada
@@ -463,9 +538,11 @@ function classifyRows(rowsIn, ncmInfo, db, opts) {
   const aliqVals = C.ALIQ == null ? [] : dataRows.map(row => num(g(row, 'ALIQ'))).filter(v => v > 0);
   const aliqFator = aliqVals.length && aliqVals.every(v => v <= 1) ? 100 : 1;
   // CSOSN (Simples Nacional): pelo cabeçalho ou pelos valores da coluna
+  // Cabeçalho só "CSOSN" decide; "CST/CSOSN" (comum em exportações) decide pelos valores.
   let isCsosn = false;
   if (C.CST != null) {
-    if (/CSOSN/.test(normTxt(header[C.CST]))) isCsosn = true;
+    const hc = normTxt(header[C.CST]);
+    if (/CSOSN/.test(hc) && !/\bCST\b/.test(hc)) isCsosn = true;
     else {
       const vals = dataRows.map(row => String(g(row, 'CST') == null ? '' : g(row, 'CST')).replace(/\D/g, '')).filter(Boolean);
       isCsosn = vals.length > 0 && vals.filter(v => CSOSN_SET.has(v)).length / vals.length >= 0.8;
@@ -474,7 +551,7 @@ function classifyRows(rowsIn, ncmInfo, db, opts) {
 
   const stats = { total: 0, classified: 0, stIsento: 0, divergentes: 0, revisar: 0, ncmInvalido: 0, atencao: 0,
                   ncmSuspeito: 0, ncmSuspeitoImpacto: 0, ncmCorrigido: 0, difTotal: 0, aliqFator, isCsosn,
-                  temGtin, gtinConfirmado: 0, gtinCorrigido: 0, gtinSemBase: 0, gtinInvalido: 0, gtinNaoAplicado: 0, semGtin: 0 };
+                  temGtin, gtinConfirmado: 0, gtinCorrigido: 0, gtinSemBase: 0, gtinInvalido: 0, gtinNaoAplicado: 0, gtinReferencia: 0, semGtin: 0 };
   const newNCMs = {};
   const gtinReport = new Map();   // gtin → resumo para a aba "Validação GTIN"
 
@@ -497,9 +574,10 @@ function classifyRows(rowsIn, ncmInfo, db, opts) {
     const ncmInformado = corrigido ? pad8(orig) : ncm;
 
     // ── GTIN: fonte prioritária do NCM ──
-    let gtinTxt = '', gtinStatus = '', gtinOk = false;
+    let gtinTxt = '', gtinStatus = '', gtinOk = false, descGtin = '';
     if (temGtin) {
       const gd = gtinDecision(g(row, 'GTIN'), desc, opts.gtinInfo, opts.gtinShared);
+      descGtin = gd.descGtin || '';
       if (typeof row[C.GTIN] === 'number') row[C.GTIN] = String(row[C.GTIN]);   // evita 7,89E+12 no Excel
       row[C.NCM_GTIN] = gd.ncm ? fmtNcm(gd.ncm) : '';
       const confl = gd.conflito ? ` (base tem também ${gd.conflito.map(fmtNcm).join(', ')})` : '';
@@ -523,12 +601,14 @@ function classifyRows(rowsIn, ncmInfo, db, opts) {
         const sit = gd.situacao;
         if (sit === 'sem-gtin') stats.semGtin++;
         else if (sit === 'invalido') stats.gtinInvalido++;
+        else if (sit === 'referencia') stats.gtinReferencia++;
         else if (sit === 'compartilhado' || sit === 'desc-diverge') stats.gtinNaoAplicado++;
         else if (sit !== 'interno') stats.gtinSemBase++;
         const FONTE_SIT = { 'sem-gtin': ' (sem GTIN)', interno: ' (GTIN interno)', invalido: ' (GTIN inválido)',
-                            compartilhado: ' (GTIN não aplicado)', 'desc-diverge': ' (GTIN não aplicado)' };
+                            compartilhado: ' (GTIN não aplicado)', 'desc-diverge': ' (GTIN não aplicado)', referencia: ' (PreçoMelhor só como referência)' };
         row[C.NCM_FONTE] = corrigido ? 'Revisão manual' : 'NCM informado' + (FONTE_SIT[sit] || ' (GTIN sem cadastro na base)');
-        if (sit === 'compartilhado' || sit === 'desc-diverge')
+        if (sit === 'referencia') { if (gd.ncm !== ncmInformado) gtinTxt = `PreçoMelhor indica ${fmtNcm(gd.ncm)} para o GTIN ${fmtGtin(gd.gtin)} (cadastro não oficial — não aplicado; confira)`; }
+        else if (sit === 'compartilhado' || sit === 'desc-diverge')
           gtinTxt = `GTIN ${fmtGtin(gd.gtin)} indica ${fmtNcm(gd.ncm)}, não aplicado: ${gd.motivo}`;
         else if (sit !== 'sem-gtin' && sit !== 'interno') gtinTxt = `GTIN ${fmtGtin(gd.gtin)}: ${gd.motivo} — usado o NCM informado`;
       }
@@ -541,16 +621,18 @@ function classifyRows(rowsIn, ncmInfo, db, opts) {
     }
     if (corrigido && !gtinOk) stats.ncmCorrigido++;
 
-    const rule = getRuleFor(ncm, desc, db);
+    // Planilha sem descrição: as regras por descrição usam a descrição do GTIN
+    const descRegra = desc || descGtin;
+    const rule = getRuleFor(ncm, descRegra, db);
 
     // NCM suspeito pela descrição (a regra por descrição com "atenção" já avisa;
     // NCM validado pelo GTIN não é tratado como suspeito)
-    const confirmado = gtinOk || (opts.isConfirmed ? opts.isConfirmed(cod, desc, ncm) : false);
+    const confirmado = gtinOk || (opts.isConfirmed ? opts.isConfirmed(cod, desc, ncm, C.GTIN != null ? g(row, 'GTIN') : '') : false);
     const jaAvisado = rule && rule.atencao && /^descricao:/.test(rule.fonte || '');
-    const coh = confirmado || jaAvisado ? null : checkNcmCoherence(ncm, desc);
+    const coh = confirmado || jaAvisado ? null : checkNcmCoherence(ncm, descRegra);
     let cohTxt = '', imp = null;
     if (coh) {
-      imp = impactoNcm(ncm, coh.sugerido, desc, coh, db);
+      imp = impactoNcm(ncm, coh.sugerido, descRegra, coh, db);
       row[C.NCM_SUG] = coh.sugerido ? fmtNcm(coh.sugerido) : coh.esperado.map(fmtPrefixo).join(' / ');
       cohTxt = 'NCM SUSPEITO: ' + coh.msg + (coh.sugerido ? ` — sugerido ${fmtNcm(coh.sugerido)}` : '');
       if (imp.novo) cohTxt += imp.muda ? ` — tratamento MUDA: hoje ${imp.atual}, com ${imp.alvo} seria ${imp.novo}`
@@ -592,7 +674,7 @@ function classifyRows(rowsIn, ncmInfo, db, opts) {
     const obs = [rule.obs || ''];
     if (rule.atencao && !/ATENÇÃO/.test(rule.obs || '')) obs.push('ATENÇÃO: ' + rule.atencao);
     if (a.simples) obs.push('Simples Nacional (CSOSN) — ICMS no DAS; conferido só o enquadramento ST/isento/tributado');
-    else if (a.baseFaltando) obs.push('Base não informada (saída sem tributação) — ICMS correto depende do valor do item');
+    else if (a.baseFaltando && a.aliq !== '') obs.push('Base não informada (saída sem tributação) — ICMS correto depende do valor do item');
     if (a.baseFonte) obs.push('Base correta calculada sobre ' + a.baseFonte);
     if (ncmProblema) obs.push(ncmProblema);
     if (gtinTxt) obs.push(gtinTxt);
@@ -626,17 +708,21 @@ function classifyRows(rowsIn, ncmInfo, db, opts) {
   }
 
   // ── Consolidação ─────────────────────────────────────────────────
-  // Agrupa por produto + NCM + CST + alíquota + CFOP, para que linhas
-  // com tratamento diferente do mesmo produto não se escondam umas nas outras.
+  // Agrupa por produto + NCM + CST + alíquota + CFOP + situação, para que linhas
+  // com tratamento ou resultado diferente do mesmo produto não se escondam umas nas outras.
   const keyCols = ['COD', 'NCM', 'CST', 'ALIQ', 'CFOP'].filter(k => C[k] != null);
   if (C.COD == null && C.DESC != null) keyCols.unshift('DESC');
   const sumCols = ['BASE', 'ICMS', 'VALOR', 'DESC_V', 'QTD', 'FRETE', 'SEGURO', 'OUTRAS', 'VITEM_C', 'BASE_C', 'ICMS_C', 'DIF', 'NITENS'].filter(k => C[k] != null);
   const cstKey = v => isCsosn ? String(v == null ? '' : v).replace(/\D/g, '') : cst2(v);
+  const situacao = row => String(row[C.STATUS] || '').split(/ — | \| /)[0];
+  const AGRUPADO = ' | (linhas agrupadas com valores diferentes — ver Nº LINHAS)';
   const map = new Map();
   for (const row of dataRows) {
-    const key = keyCols.map(k => k === 'NCM' ? pad8(row[C[k]]) : k === 'CST' ? cstKey(row[C[k]]) : String(row[C[k]] == null ? '' : row[C[k]]).trim()).join('|');
+    const key = keyCols.map(k => k === 'NCM' ? pad8(row[C[k]]) : k === 'CST' ? cstKey(row[C[k]]) : String(row[C[k]] == null ? '' : row[C[k]]).trim())
+      .concat(situacao(row)).join('|');
     if (!map.has(key)) { map.set(key, row.slice()); continue; }
     const ex = map.get(key);
+    if (ex[C.STATUS] !== row[C.STATUS] && !String(ex[C.STATUS]).endsWith(AGRUPADO)) ex[C.STATUS] += AGRUPADO;
     for (const k of sumCols) {
       const i = C[k];
       if ((ex[i] === '' || ex[i] == null) && (row[i] === '' || row[i] == null)) continue;
@@ -644,7 +730,7 @@ function classifyRows(rowsIn, ncmInfo, db, opts) {
     }
   }
   const consolidated = [header, ...map.values()];
-  return { rows: consolidated, detailRows: rows, cols: C, stats, newNCMs, headerInserted, gtinReport: [...gtinReport.values()] };
+  return { rows: consolidated, cols: C, stats, newNCMs, gtinReport: [...gtinReport.values()] };
 }
 
-if (typeof module !== 'undefined') module.exports = { classifyRows, gtinParse, gtinDecision, descCompat, valorDoItem, getRuleFor, suggestRule, mapColumns, avaliarLinha, avaliarSimples, checkNcmCoherence, impactoNcm, descTrat, pad8, cst2, fmtNcm, DESC_RULES };
+if (typeof module !== 'undefined') module.exports = { classifyRows, columnsOf, gtinParse, gtinDecision, descCompat, valorDoItem, getRuleFor, suggestRule, mapColumns, avaliarLinha, avaliarSimples, checkNcmCoherence, impactoNcm, descTrat, pad8, cst2, fmtNcm, DESC_RULES };

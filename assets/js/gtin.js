@@ -4,25 +4,35 @@
 //   1. Base própria (neste navegador): importada de XML de NF-e de entrada
 //      ou de planilha GTIN × NCM (cadastro do ERP, relatório do CCG etc.)
 //   2. Tabela fixa assets/js/gtin-data.js (window.GTIN_TABLE), se existir
-//   3. PreçoMelhor (consulta gratuita sem chave; cache local por até 30 dias)
-//   4. SEFAZ CCG oficial (opcional, via conector local com certificado A1)
+//   3. Respostas já guardadas (cache de 30 dias) da SEFAZ e do PreçoMelhor
+//   4. SEFAZ CCG oficial (opcional, conector local com certificado A1) —
+//      só GTINs brasileiros (prefixo 789/790), máx. 100 por lote
+//   5. PreçoMelhor (consulta gratuita, máx. 60 por lote) para o que sobrar.
+//      É cadastro não oficial: o NCM dele só aparece como referência e
+//      nunca substitui o NCM informado (ver gtinDecision).
 // Se o GTIN não estiver em nenhuma delas, a linha segue com o NCM informado.
 // ════════════════════════════════════════════════════════════════════
 const GtinBase = (() => {
   const BASE_KEY   = 'gtin_ncm_base_v1';
   const FREE_KEY   = 'gtin_precomelhor_cache_v1';
+  const SEFAZ_KEY  = 'gtin_sefaz_cache_v1';
+  const BRIDGE     = 'http://127.0.0.1:8787';
   const TTL_MS     = 30 * 24 * 3600 * 1000;
+  const TTL_MISS   = 24 * 3600 * 1000;    // "não encontrado" é consultado de novo no dia seguinte
   const FREE_MAX   = 60;           // PreçoMelhor publica uso justo de ~60 consultas/minuto
   const FREE_GAP   = 1100;         // espaçamento para respeitar o limite por IP
+  const SEFAZ_MAX  = 100;
+  const SEFAZ_GAP  = 1100;         // o conector aceita no máximo 1 consulta por segundo
   const dig = s => String(s == null ? '' : s).replace(/\D/g, '');
 
   const load = (k, def) => { try { return JSON.parse(localStorage.getItem(k) || 'null') || def; } catch (e) { return def; } };
   const store = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } };
-  try { localStorage.removeItem('gtin_cosmos_cache_v1'); localStorage.removeItem('gtin_cosmos_token'); } catch (e) {}
+  const fresh = c => c && Date.now() - c.t < (c.found ? TTL_MS : TTL_MISS);
 
   // base: gtin14 → { ncm, desc, cest, fonte, cont: {ncm: ocorrências} }
   let base = load(BASE_KEY, {});
   let freeCache = load(FREE_KEY, {});
+  let sefazCache = load(SEFAZ_KEY, {});
   let lastMode = { free: 'off', sefaz: 'off', msg: '' };
   let freeNextAt = 0;
   let freeQueue = Promise.resolve();
@@ -81,7 +91,7 @@ const GtinBase = (() => {
   function importRows(rows, fileName) {
     const hIdx = findHeader(rows);
     if (hIdx < 0) return { itens: 0, erro: 'coluna NCM não encontrada' };
-    const C = mapColumns(rows[hIdx]);
+    const C = columnsOf(rows, hIdx);
     if (C.GTIN == null) return { itens: 0, erro: 'coluna GTIN/EAN/código de barras não encontrada' };
     const colNcm = C.NCM_GTIN != null ? C.NCM_GTIN : C.NCM;
     let itens = 0;
@@ -126,7 +136,6 @@ const GtinBase = (() => {
       [fmtGtin(g), fmtNcm(e.ncm), e.desc, e.cest || '', e.fonte || '', Object.entries(e.cont || {}).map(([n, c]) => `${fmtNcm(n)} (${c})`).join(' · ')])];
   }
   function clear() { base = {}; store(BASE_KEY, base); }
-  function remove(g14) { delete base[g14]; store(BASE_KEY, base); }
   function count() { return Object.keys(base).length; }
 
   // ── Consulta ────────────────────────────────────────────────────────
@@ -138,25 +147,32 @@ const GtinBase = (() => {
     }
     const f = getFileTable().get(g14);
     if (f) return { found: true, ncm: pad8(f.ncm), desc: f.desc || f.descricao || '', cest: dig(f.cest), fonte: f.fonte || 'tabela GTIN local' };
-    const fc = freeCache[g14];
-    const freeFresh = fc && Date.now() - fc.t < (fc.found ? TTL_MS : 24 * 3600 * 1000);
-    if (freeFresh && fc.found && fc.ncm) return { found: true, ncm: fc.ncm, desc: fc.desc || '', cest: fc.cest || '', fonte: 'PreçoMelhor (cache)', precomelhor: true };
-    if (freeFresh && fc.found) return { found: true, ncm: fc.ncm || '', desc: fc.desc || '', cest: fc.cest || '', fonte: 'PreçoMelhor (cache)', precomelhor: true };
-    if (freeFresh) return { found: false, precomelhor: true };
+    // Cache das consultas externas: SEFAZ (oficial) antes do PreçoMelhor
+    const sc = sefazCache[g14], fc = freeCache[g14];
+    const hit = fresh(sc) && sc.found && sc.ncm ? ['SEFAZ CCG (cache)', sc, 'sefaz']
+              : fresh(fc) && fc.found && fc.ncm ? ['PreçoMelhor (cache)', fc, 'precomelhor']
+              : fresh(sc) && sc.found ? ['SEFAZ CCG (cache)', sc, 'sefaz']
+              : fresh(fc) && fc.found ? ['PreçoMelhor (cache)', fc, 'precomelhor'] : null;
+    const tried = { sefaz: fresh(sc), precomelhor: fresh(fc) };
+    if (hit) return Object.assign({ found: true, ncm: hit[1].ncm || '', desc: hit[1].desc || '', cest: hit[1].cest || '', fonte: hit[0], viaFree: hit[2] === 'precomelhor' }, tried);
+    if (tried.sefaz || tried.precomelhor) return Object.assign({ found: false }, tried);
     return null;
   }
 
+  // Código como foi digitado na planilha (GTIN-8/12/13/14)
+  const asTyped = g14 => g14.slice(-(inputLengths.get(g14) || 14));
+  // A CCG só tem GTINs concedidos pela GS1 Brasil (rejeição 9492 para os demais)
+  const isBrazilian = g14 => { const c = asTyped(g14); return /^(789|790)/.test(c.length === 14 ? c.slice(1) : c); };
+
   async function fetchPrecoMelhor(g14) {
-    const inputLength = inputLengths.get(g14) || 14;
-    const code = g14.slice(-inputLength);
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 12000);
     try {
-      const res = await fetch(`https://www.precomelhor.com.br/api/product/${encodeURIComponent(code)}`, {
+      const res = await fetch(`https://www.precomelhor.com.br/api/product/${encodeURIComponent(asTyped(g14))}`, {
         headers: { Accept: 'application/json' }, signal: ctl.signal, credentials: 'omit'
       });
       if (res.status === 404) return { found: false };
-      if (res.status === 429) return { error: true, rateLimited: true, message: 'limite de consultas gratuitas do PreçoMelhor atingido' };
+      if (res.status === 429) return { error: true, message: 'limite de consultas gratuitas do PreçoMelhor atingido' };
       if (!res.ok) return { error: true, message: `PreçoMelhor respondeu HTTP ${res.status}` };
       const json = await res.json();
       const item = json && (json.product || json);
@@ -170,7 +186,7 @@ const GtinBase = (() => {
         fonte: 'PreçoMelhor'
       };
     } catch (error) {
-      return { error: true, message: error.name === 'AbortError' ? 'tempo esgotado no PreçoMelhor' : 'PreçoMelhor indisponível (rede ou CORS)' };
+      return { error: true, message: error.name === 'AbortError' ? 'tempo esgotado no PreçoMelhor' : 'PreçoMelhor indisponível (rede ou bloqueio do navegador)' };
     } finally { clearTimeout(timer); }
   }
 
@@ -186,73 +202,81 @@ const GtinBase = (() => {
   }
 
   async function fetchSefaz(g14) {
-    const code = g14.slice(- (inputLengths.get(g14) || 14));
     try {
-      const res = await fetch(`http://127.0.0.1:8787/api/gtin/${encodeURIComponent(code)}`, {
+      const res = await fetch(`${BRIDGE}/api/gtin/${encodeURIComponent(asTyped(g14))}`, {
         headers: { Authorization: `Bearer ${bridgeToken}`, Accept: 'application/json' }, credentials: 'omit'
       });
       const data = await res.json();
       if (!res.ok) return { error: true, message: data.error || `Conector respondeu HTTP ${res.status}` };
       return Object.assign({ fonte: 'SEFAZ CCG' }, data);
-    } catch (e) { return { error: true, message: 'Conector local indisponível; inicie sefaz-bridge.' }; }
+    } catch (e) { return { error: true, message: 'Conector SEFAZ local indisponível — confirme que node sefaz-bridge/server.mjs está rodando.' }; }
   }
+
+  const precisa = r => !r || r.error || !r.found || !r.ncm;
 
   // gtins: chaves de 14 dígitos. Retorna Map gtin14 → { found, ncm, desc, cest, fonte } | { found:false } | { error }
   async function lookupMany(gtins, onProgress, opts) {
     opts = opts || {};
-    const out = new Map(), pending = [];
-    for (const g of gtins) {
-      const r = fromLocal(g);
-      if (r) out.set(g, r);
-      if (!r || !r.found || !r.ncm) pending.push(g);
-    }
+    const out = new Map();
+    for (const g of gtins) { const r = fromLocal(g); if (r) out.set(g, r); }
     lastMode = { free: 'off', sefaz: 'off', msg: '' };
     const messages = [];
 
-    if (pending.length && opts.free) {
-      const freeEligible = pending.filter(g => !out.get(g)?.precomelhor);
-      const fila = freeEligible.slice(0, FREE_MAX);
-      let done = 0, encontrados = 0, freeError = '';
-      for (const g of fila) {
-        const result = await fetchPrecoMelhorQueued(g);
-        if (result.error) {
-          freeError = result.message || 'erro na consulta gratuita';
-          out.set(g, result);
-          if (result.rateLimited) break;
-          // Falhas de rede/CORS costumam afetar toda a fila; não repetir a falha em cada GTIN.
-          break;
+    // 1º SEFAZ CCG (oficial), só para GTIN brasileiro ainda sem NCM
+    if (opts.sefaz) {
+      // NCM vindo só do PreçoMelhor também é conferido na fonte oficial
+      const fila = gtins.filter(g => { const r = out.get(g); return (precisa(r) || r.viaFree) && !(r || {}).sefaz && isBrazilian(g); });
+      if (!bridgeToken) {
+        if (fila.length) { lastMode.sefaz = 'erro'; messages.push('SEFAZ: conector não conectado — informe o token e clique em Conectar.'); }
+      } else if (fila.length) {
+        let done = 0, encontrados = 0, stop = '';
+        const lote = fila.slice(0, SEFAZ_MAX);
+        for (const g of lote) {
+          if (done) await new Promise(resolve => setTimeout(resolve, SEFAZ_GAP));
+          const r = await fetchSefaz(g);
+          if (r.error) { stop = r.message; break; }
+          sefazCache[g] = { t: Date.now(), found: !!r.found, ncm: r.ncm ? pad8(r.ncm) : '', desc: r.desc || '', cest: dig(r.cest), cStat: r.cStat || '' };
+          const prev = out.get(g) || {};
+          if (r.found) out.set(g, Object.assign({}, prev, { found: true, viaFree: !r.ncm && prev.viaFree, ncm: r.ncm ? pad8(r.ncm) : prev.ncm || '', desc: r.desc || prev.desc || '',
+                                                             cest: dig(r.cest) || prev.cest || '', fonte: r.ncm ? 'SEFAZ CCG' : prev.fonte || 'SEFAZ CCG', sefaz: true }));
+          else out.set(g, Object.assign({}, prev, { found: !!prev.found, sefaz: true, motivo: r.motivo || r.error || '' }));
+          if (r.found && r.ncm) encontrados++;
+          done++;
+          onProgress && onProgress(done, lote.length, `Consultando GTINs na SEFAZ… ${done}/${lote.length}`);
         }
-        freeCache[g] = Object.assign({ t: Date.now() }, result);
-        out.set(g, Object.assign({ fonte: 'PreçoMelhor' }, result));
-        if (result.found) encontrados++;
-        done++;
-        onProgress && onProgress(done, fila.length, `Consultando GTINs grátis… ${done}/${fila.length}`);
+        store(SEFAZ_KEY, sefazCache);
+        lastMode.sefaz = stop ? 'erro' : 'ok';
+        messages.push(`SEFAZ CCG: ${done} consulta(s); ${encontrados} com NCM.`);
+        if (stop) messages.push(stop);
+        if (fila.length > lote.length) messages.push(`${fila.length - lote.length} GTIN(s) ficaram para o próximo lote (limite de ${SEFAZ_MAX} por vez, para não caracterizar consumo indevido).`);
       }
-      store(FREE_KEY, freeCache);
-      lastMode.free = freeError ? 'erro' : 'ok';
-      messages.push(`PreçoMelhor: ${done} consulta(s) gratuita(s); ${encontrados} produto(s) encontrado(s).`);
-      if (freeError) messages.push(freeError + '.');
-      if (freeEligible.length > fila.length) messages.push(`${freeEligible.length - fila.length} GTIN(s) ficaram fora do lote gratuito de ${FREE_MAX}; importe-os na base ou consulte-os depois.`);
     }
 
-    const sefazPending = pending.filter(g => { const r = out.get(g); return !r || r.error || !r.found || !r.ncm; });
-    if (sefazPending.length && opts.sefaz && bridgeToken) {
-      let done = 0, encontrados = 0, stop = '';
-      for (const g of sefazPending.slice(0, 100)) {
-        const r = await fetchSefaz(g);
-        if (r.error) { stop = r.message; break; }
-        if (r.found && r.ncm) { out.set(g, r); encontrados++; }
-        else out.set(g, r);
+    // 2º PreçoMelhor (gratuito) para o que ainda estiver sem NCM
+    if (opts.free) {
+      const fila = gtins.filter(g => precisa(out.get(g)) && !(out.get(g) || {}).precomelhor);
+      const lote = fila.slice(0, FREE_MAX);
+      let done = 0, encontrados = 0, freeError = '';
+      for (const g of lote) {
+        const r = await fetchPrecoMelhorQueued(g);
+        // Falhas de rede/bloqueio costumam afetar toda a fila; não repetir a falha em cada GTIN.
+        if (r.error) { freeError = r.message || 'erro na consulta gratuita'; break; }
+        freeCache[g] = Object.assign({ t: Date.now() }, r);
+        const prev = out.get(g);
+        if (r.found || !prev) out.set(g, Object.assign({}, prev, r, { fonte: 'PreçoMelhor', precomelhor: true, viaFree: true }));
+        if (r.found && r.ncm) encontrados++;
         done++;
-        onProgress && onProgress(done, sefazPending.length, `Consultando GTINs na SEFAZ… ${done}/${sefazPending.length}`);
-        if (done < Math.min(sefazPending.length, 100)) await new Promise(resolve => setTimeout(resolve, 1100));
+        onProgress && onProgress(done, lote.length, `Consultando GTINs grátis… ${done}/${lote.length}`);
       }
-      lastMode.sefaz = stop ? 'erro' : 'ok';
-      messages.push(`SEFAZ CCG: ${done} consulta(s); ${encontrados} produto(s) com NCM.`);
-      if (stop) messages.push(stop);
-      if (sefazPending.length > 100) messages.push('Limite de 100 consultas por lote para evitar consumo indevido; reclassifique em lotes menores.');
+      if (lote.length) {
+        store(FREE_KEY, freeCache);
+        lastMode.free = freeError ? 'erro' : 'ok';
+        messages.push(`PreçoMelhor: ${done} consulta(s); ${encontrados} com NCM.`);
+        if (freeError) messages.push(freeError + '.');
+        if (fila.length > lote.length) messages.push(`${fila.length - lote.length} GTIN(s) ficaram fora do lote gratuito de ${FREE_MAX}; reclassifique depois ou importe-os na base.`);
+      }
     }
-    for (const g of pending) if (!out.has(g)) out.set(g, { found: false });
+    for (const g of gtins) if (!out.has(g)) out.set(g, { found: false });
     lastMode.msg = messages.join(' ');
     return out;
   }
@@ -268,7 +292,7 @@ const GtinBase = (() => {
   function locate(rows) {
     const h = findHeader(rows);
     if (h < 0) return null;
-    const C = mapColumns(rows[h]);
+    const C = columnsOf(rows, h);
     return C.GTIN == null || C.NCM == null ? null : { h, C };
   }
 
@@ -331,9 +355,8 @@ const GtinBase = (() => {
     return { rows, shared };
   }
 
-  return { importFiles, importXml, importRows, exportRows, addEntry, clear, remove, count,
-           lookupMany, lookup, collect, apply, sharedGtins, setBridgeToken, mode: () => lastMode,
-           save: () => store(BASE_KEY, base) };
+  return { importFiles, importXml, importRows, exportRows, addEntry, clear, count, bridgeUrl: BRIDGE,
+           lookupMany, lookup, collect, apply, sharedGtins, setBridgeToken, mode: () => lastMode };
 })();
 
 if (typeof module !== 'undefined') module.exports = { GtinBase };

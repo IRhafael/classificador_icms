@@ -23,7 +23,8 @@ const NCM_CATEGORIAS = [
   // ── Bebidas ─────────────────────────────────────────────────────────
   { id: 'agua-mineral', nome: 'Água mineral', re: /AGUA\s+MINERAL|AGUA\s+(C|S)\/?\s?GAS|AGUAFINA|AGUA\s+(DE\s+)?MESA/,
     exceto: /COCO|SANIT|OXIG|COL\b|COLONIA|MICELAR/, ncm: ['2201'], sugerido: '22011000' },
-  { id: 'agua-coco', nome: 'Água de coco', re: /AGUA\s+(DE\s+)?COCO/, ncm: ['200989', '2202'], sugerido: '20098921' },
+  { id: 'agua-coco', nome: 'Água de coco', re: /AGUA\s+(DE\s+)?COCO/,
+    exceto: /^SAB\b|SABONETE|SHAMPOO|^SH\b|^COND\b|CONDICION|CREME|HIDRAT|\bHID\b|DESOD|LOCAO|PERFUM|COLONIA|OLEO|^DES\b/, ncm: ['200989', '2202'], sugerido: '20098921' },
   { id: 'refrigerante', nome: 'Refrigerante',
     re: /REFRIG|^COCA\b|COCA.?COLA|^CC\s|^CCOLA|^FANTA|^PEPSI|^SPRITE|^GUARANA\s|SODA\s+LIMONADA|H2OH|^SCHWEPPES/,
     exceto: /SODA\s+CAUST|ZERO\s+ALCOOL/, ncm: ['220210', '220299'], sugerido: '22021000' },
@@ -33,13 +34,14 @@ const NCM_CATEGORIAS = [
   { id: 'destilado', nome: 'Bebida destilada', re: /^VODKA|^CACHACA|^AGUARDENTE|^CONHAQUE|^WHISK(E?Y)\b|^RUM\b|^GIN\b|^LICOR|^APER(ITIVO)?\b/,
     exceto: /ALEMA/, ncm: ['2208'] },
   { id: 'vinagre', nome: 'Vinagre', re: /^VINAGRE/, ncm: ['2209'], sugerido: '22090000' },
-  { id: 'energetico', nome: 'Energético/isotônico', re: /ENERGETICO|RED\s*BULL|MONST(ER)?\s+ENERGY|GATORADE|POWERADE|ISOTONICO/, ncm: ['220299'], sugerido: '22029900' },
+  { id: 'energetico', nome: 'Energético/isotônico', re: /ENERGETICO|RED\s*BULL|MONST(ER)?\s+ENERGY|GATORADE|POWERADE|ISOTONICO/,
+    exceto: /ISQUEIRO|\bRACK\b|BONE|CAMIS|\bCOPO\b|CHAVEIRO|ADESIVO|SQUEEZE|GARRAFA\s+(TERM|PLAST)/, ncm: ['220299'], sugerido: '22029900' },
 
   // ── Leite e derivados ───────────────────────────────────────────────
   { id: 'leite-uht', nome: 'Leite UHT/longa vida', re: /LONG\.?\s*VIDA|LEITE\s+UHT/, exceto: /CREME|COND|COCO/, ncm: ['0401'] },
   { id: 'leite-po', nome: 'Leite em pó', re: /LEITE\s+(EM\s+)?PO\b|LEITE\s+INTEGRAL\s+INST|\bLEPO\b|^NINHO\b/,
-    exceto: /FORMULA|NESTOGENO|INF\b|INFANTIL|\bNAN\b|APTAMIL|MILNUTRI|COMPOSTO|LT\s+INF/, ncm: ['0402'] },
-  { id: 'leite-cond', nome: 'Leite condensado', re: /LEITE\s+COND/, ncm: ['040299'], sugerido: '04029900' },
+    exceto: /FORMULA|NESTOGENO|INF\b|INFANTIL|\bNAN\b|APTAMIL|MILNUTRI|COMPOSTO|LT\s+INF|\bIOG|IOGURTE|POLPA|CEREAL|BISC/, ncm: ['0402'] },
+  { id: 'leite-cond', nome: 'Leite condensado', re: /LEITE\s+COND/, exceto: /^CHOC|CHOCOLATE|COBERTURA|RECHEIO|^DOCE|BISC|^BOLO|SORVETE|SABOR|^BALA|^BOMBOM|^TRUFA|PICOLE/, ncm: ['040299'], sugerido: '04029900' },
   { id: 'creme-leite', nome: 'Creme de leite', re: /CREME\s+D?\s?E?\s*LEITE|CREME\s+LEITE/, ncm: ['0401', '0402'] },
   { id: 'iogurte', nome: 'Iogurte/leite fermentado', re: /\bIOG(URTE)?\b|LEITE\s+FERMENTADO/, exceto: /CHAMBINHO|PETIT\s+SUISSE|^HIDR|HIDRAT|^SAB\b|SABONETE|^SH\b|SHAMPOO|^COND\b|^CR\b|CREME\s+(P\/|DE\s+)?(PELE|MAOS|CORPO)/, ncm: ['0403', '2202'] },
   { id: 'queijo', nome: 'Queijo/requeijão', re: /^(QUEIJO|REQUEIJAO)\b/, ncm: ['0406'] },
@@ -56,7 +58,7 @@ const NCM_CATEGORIAS = [
     exceto: /EMP\b|EMPAN|TEMP\.?\s*COZ|DESF|NUGGET|STEAK|SADIA\s+GRANEL/, ncm: ['0207', '0210', '1602'] },
   { id: 'bovino', nome: 'Carne bovina in natura',
     re: /\bBOV\b\.?|BOVINO|PICANHA|COXAO|CONTRA\s*FILE|ALCATRA|PATINHO|\bACEM\b|MUSCULO|CARNE\s+MOIDA|FRALDINHA/,
-    exceto: /HAMBURG|FIAMBRE|ALMONDEGA|KIBE|EMPAN|AVE\/BOV|BOV\/FRANG/, ncm: ['0201', '0202', '0206', '0210', '0504', '1602'] },
+    exceto: /HAMBURG|FIAMBRE|ALMONDEGA|KIBE|EMPAN|AVE\/BOV|BOV\/FRANG|FAROFA|SABOR|TEMPERO|MOLHO|CHIPS|SALGAD|SNACK|BATATA|CALDO|SAZON|RACAO|PETISCO/, ncm: ['0201', '0202', '0206', '0210', '0504', '1602'] },
   { id: 'suino', nome: 'Carne suína in natura', re: /SUIN[OA]|BISTECA|\bLOMBO\b|PERNIL/, exceto: /LING|SALSICHA/,
     ncm: ['0203', '0206', '0209', '0210', '1601', '1602'] },
   { id: 'pescado', nome: 'Peixe', re: /TILAPIA|PANGA|PESCADA|MERLUZA|BACALHAU|SALMAO/, ncm: ['0302', '0303', '0304', '0305', '1604'] },
@@ -98,7 +100,7 @@ const NCM_CATEGORIAS = [
   { id: 'shampoo', nome: 'Shampoo/condicionador', re: /^SH\b\.?|SHAMPOO|^KIT\s+(SH|SEDA\s+SH)|^COND\b\.?|CONDICIONADOR|CR(EME)?\s+(DE\s+)?PENT/, ncm: ['3305'] },
   { id: 'sabonete', nome: 'Sabonete', re: /^SAB\b\.?(?!\s*(EM\s+)?(PO|PASTA)\b)|SABONETE(?!IRA)/, ncm: ['3401'] },
   { id: 'sabao', nome: 'Sabão/detergente', re: /^SABAO\b|^DET(ERG)?\b\.?|DETERGENTE|LAVA\s+ROU/, ncm: ['3401', '3402'] },
-  { id: 'amaciante', nome: 'Amaciante', re: /^AMAC/, ncm: ['3809', '3402'] },
+  { id: 'amaciante', nome: 'Amaciante', re: /^AMAC/, exceto: /CARNE|TEMPERO/, ncm: ['3809', '3402'] },
   { id: 'desinfetante', nome: 'Desinfetante', re: /^DESE?INF/, ncm: ['3808', '3402'] },
   { id: 'agua-sanitaria', nome: 'Água sanitária', re: /AGUA\s+SANIT/, ncm: ['2828'], sugerido: '28289011' },
   { id: 'desodorante', nome: 'Desodorante', re: /^DES(OD)?\b\.?\s|^DES\.|DESODORANTE|ANTITRANSP|^DS\.|^DEO\b/, exceto: /SANIT|LIQ\.?\s+P\/?\s*PISO/, ncm: ['3307'] },
@@ -142,7 +144,7 @@ const NCM_CATEGORIAS = [
 // reconheceu a descrição.
 const NCM_EXIGE_DESCRICAO = [
   { prefixos: ['3003', '3004'], nome: 'Medicamento',
-    re: /^MED\b|MEDIC|GOTAS|\bGTS\b|\bCOMP\b|COMPRIMIDO|XAROPE|POMADA|CAPSULA|\d\s*MG\b|\bSUSP\b|AMPOLA|EFERV|VITAMINA|PASTILHA|ANTIAC|ANALG|ANTI[- ]?(GRIPAL|INFLAM|SEPT)|SORO\b|COLIRIO/ },
+    re: /^MED\b|MEDIC|GOTAS|\bGTS\b|\bCOMP\b|COMPRIMIDO|XAROPE|POMADA|CAPSULA|\d\s*MG\b|\bSUSP\b|AMPOLA|EFERV|VITAMINA|PASTILHA|ANTIAC|ANALG|ANTI[- ]?(GRIPAL|INFLAM|SEPT)|SORO\b|COLIRIO|\bINJ\b|INJET|\bVET\b|VETERIN|VERMIF|PARASIT|IVOMEC|\bSPRAY\b/ },
 ];
 
 if (typeof module !== 'undefined') module.exports = { NCM_CATEGORIAS, NCM_EXIGE_DESCRICAO };

@@ -8,33 +8,48 @@
 //   • descricao  → o NCM não combina com a descrição (ver ncm-rules.js)
 //   Quando o produto tem GTIN com NCM na base (gtin.js), esse NCM é a
 //   sugestão prioritária e não é tratado como suspeito.
+//
+// opts.gtinProduct(rawGtin) → { desc, fonte } — descrição vinda do GTIN. Deve
+// ser passado igual em analyze, apply e isConfirmed para a chave do produto
+// ser a mesma nas três (planilhas sem coluna de descrição dependem disso).
 // ════════════════════════════════════════════════════════════════════
 const NcmNormalizer = (() => {
   const STORAGE_KEY = 'ncm_product_corrections_v1';
-  let sessionCorrections = {};
+  let corrections = null;
 
   const cellStr = v => String(v == null ? '' : v).trim();
-  function productKey(code, description) {
-    return `${cellStr(code)}|${normTxt(description)}`;
+  const productKey = (code, description) => `${cellStr(code)}|${normTxt(description)}`;
+
+  // Chave do produto: código + descrição da planilha (ou do GTIN, ou o próprio GTIN)
+  function describe(sku, sheetDescription, rawGtin, gtinProduct) {
+    const info = (gtinProduct && gtinProduct(rawGtin)) || {};
+    const description = cellStr(sheetDescription) || cellStr(info.desc);
+    const gtinDigits = String(rawGtin == null ? '' : rawGtin).replace(/\D/g, '');
+    return { sku: cellStr(sku), description, info, key: productKey(sku, description || gtinDigits) };
   }
 
   function readCorrections() {
-    try { sessionCorrections = Object.assign(sessionCorrections, JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')); }
-    catch (e) { /* O navegador pode bloquear armazenamento em páginas file://. */ }
-    return sessionCorrections;
+    if (!corrections) {
+      corrections = {};
+      try { Object.assign(corrections, JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')); }
+      catch (e) { /* O navegador pode bloquear armazenamento em páginas file://. */ }
+    }
+    return corrections;
   }
   function persist() {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(sessionCorrections)); }
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(readCorrections())); }
     catch (e) { /* A correção vale nesta sessão mesmo sem persistência local. */ }
   }
 
   function locate(rows) {
     const headerIndex = findHeader(rows);
     if (headerIndex < 0) return null;
-    const columns = mapColumns(rows[headerIndex]);
+    const columns = columnsOf(rows, headerIndex);
     if (columns.NCM == null || (columns.DESC == null && columns.COD == null)) return null;
     return { headerIndex, columns };
   }
+  const rowDescribe = (row, C, gtinProduct) =>
+    describe(C.COD != null ? row[C.COD] : '', C.DESC != null ? row[C.DESC] : '', C.GTIN != null ? row[C.GTIN] : '', gtinProduct);
 
   // opts.check(ncm, desc) → resultado de checkNcmCoherence (ou null)
   // opts.gtinNcm(rawGtin, desc) → { ncm, fonte } quando o GTIN tem NCM aplicável
@@ -46,22 +61,24 @@ const NcmNormalizer = (() => {
     const loc = locate(rows);
     if (!loc) return [];
     const { headerIndex, columns } = loc;
-    const corrections = readCorrections();
+    const saved = readCorrections();
 
     const products = new Map();
     for (let i = headerIndex + 1; i < rows.length; i++) {
       const row = rows[i];
-      const sku = columns.COD != null ? cellStr(row[columns.COD]) : '';
-      const description = columns.DESC != null ? cellStr(row[columns.DESC]) : '';
       const rawNcm = row[columns.NCM];
-      if ((!sku && !description) || rawNcm == null || String(rawNcm).replace(/\D/g, '') === '') continue;
-      const key = productKey(sku, description);
-      if (!products.has(key)) products.set(key, { key, sku, description, counts: new Map(), gtin: new Map() });
+      if (rawNcm == null || String(rawNcm).replace(/\D/g, '') === '') continue;
+      const d = rowDescribe(row, columns, opts.gtinProduct);
+      if (!d.sku && !d.description) continue;
+      const sheetDescription = columns.DESC != null ? cellStr(row[columns.DESC]) : '';
+      if (!products.has(d.key)) products.set(d.key, { key: d.key, sku: d.sku, description: d.description, sheetDescription, descriptionGtin: new Map(), counts: new Map(), gtin: new Map() });
       const ncm = pad8(rawNcm);
-      const prod = products.get(key);
+      const prod = products.get(d.key);
+      if (sheetDescription && !prod.sheetDescription) prod.sheetDescription = sheetDescription;
+      if (d.info.desc) prod.descriptionGtin.set(cellStr(d.info.desc), d.info.fonte || 'GTIN');
       prod.counts.set(ncm, (prod.counts.get(ncm) || 0) + 1);
       if (columns.GTIN != null) {
-        const gn = gtinNcm(row[columns.GTIN], description);
+        const gn = gtinNcm(row[columns.GTIN], d.description);
         if (gn && gn.ncm) prod.gtin.set(gn.ncm, gn.fonte || 'GTIN');
       }
     }
@@ -76,13 +93,13 @@ const NcmNormalizer = (() => {
       const multiplo = counts.length > 1;
       if (!multiplo && !suspeitos.length && p.gtin.size < 2) continue;
 
-      const saved = corrections[p.key] || '';
-      // Sugestão: decisão salva › NCM do próprio produto que combina com a descrição
+      const decided = saved[p.key] || '';
+      // Sugestão: decisão salva › NCM do GTIN › NCM do próprio produto que combina com a descrição
       // › NCM sugerido pela categoria › NCM mais frequente (quando há mais de um)
       const coerente = counts.find(([n]) => !coh.get(n));
       const primeiroCoh = suspeitos.length ? coh.get(suspeitos[0][0]) : null;
       let suggestion = '', fonte = '';
-      if (saved) { suggestion = saved; fonte = 'revisado'; }
+      if (decided) { suggestion = decided; fonte = 'revisado'; }
       else if (ncmGtin) { suggestion = ncmGtin; fonte = 'GTIN: ' + p.gtin.get(ncmGtin); }
       else if (suspeitos.length && coerente) { suggestion = coerente[0]; fonte = 'NCM do próprio produto compatível com a descrição'; }
       else if (primeiroCoh && primeiroCoh.sugerido) { suggestion = primeiroCoh.sugerido; fonte = 'categoria: ' + primeiroCoh.nome; }
@@ -94,18 +111,18 @@ const NcmNormalizer = (() => {
       for (const [n] of suspeitos) motivos.push(`${fmtNcm(n)}: ${coh.get(n).msg}`);
 
       out.push({ key: p.key, sku: p.sku, description: p.description, counts, multiplo,
+                 descriptionSheet: p.sheetDescription || '', descriptionGtin: [...p.descriptionGtin.entries()].map(([desc, f]) => ({ desc, fonte: f })),
                  suspeitos: suspeitos.map(([n]) => ({ ncm: n, ...coh.get(n) })), motivos,
-                 suggestion, fonte, reviewed: !!saved, ncmGtin,
-                 // confirmado = usuário manteve um NCM que a regra acha suspeito
-                 confirmed: !!saved && counts.length === 1 && counts[0][0] === saved });
+                 suggestion, fonte, reviewed: !!decided, ncmGtin });
     }
     return out.sort((a, b) => a.description.localeCompare(b.description, 'pt-BR'));
   }
 
-  function apply(rowsIn) {
+  function apply(rowsIn, opts) {
+    opts = opts || {};
     const rows = rowsIn.map(row => (row || []).slice());
-    const corrections = readCorrections();
-    if (!Object.keys(corrections).length) return rows;
+    const saved = readCorrections();
+    if (!Object.keys(saved).length) return rows;
     const loc = locate(rows);
     if (!loc) return rows;
     const { headerIndex, columns } = loc;
@@ -114,8 +131,8 @@ const NcmNormalizer = (() => {
     const applicable = [];
     for (let i = headerIndex + 1; i < rows.length; i++) {
       const row = rows[i];
-      const key = productKey(columns.COD != null ? row[columns.COD] : '', columns.DESC != null ? row[columns.DESC] : '');
-      const corrected = corrections[key];
+      if (row[columns.NCM] == null || String(row[columns.NCM]).replace(/\D/g, '') === '') continue;
+      const corrected = saved[rowDescribe(row, columns, opts.gtinProduct).key];
       if (corrected && pad8(row[columns.NCM]) !== corrected) applicable.push({ row, corrected });
     }
     if (!applicable.length) return rows;
@@ -157,18 +174,15 @@ const NcmNormalizer = (() => {
   }
 
   function remove(key) {
-    readCorrections();
-    delete sessionCorrections[key];
+    delete readCorrections()[key];
     persist();
   }
 
-  function get(key) { return readCorrections()[key] || ''; }
-
   // Para a classificação: o usuário confirmou este NCM para este produto?
-  function isConfirmed(code, description, ncm) {
-    const saved = readCorrections()[productKey(code, description)];
+  function isConfirmed(code, description, ncm, rawGtin, gtinProduct) {
+    const saved = readCorrections()[describe(code, description, rawGtin, gtinProduct).key];
     return !!saved && saved === pad8(ncm);
   }
 
-  return { analyze, apply, save, saveMany, remove, get, isConfirmed, productKey };
+  return { analyze, apply, save, saveMany, remove, isConfirmed };
 })();
