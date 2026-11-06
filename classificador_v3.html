@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Classificador ICMS PI</title>
+
+<script src="assets/vendor/xlsx.full.min.js"></script>
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+<div class="wrapper">
+
+  <!-- Header -->
+  <header class="header">
+    <div class="header-brand">
+      <div class="header-title">Classificador ICMS — Piauí</div>
+      <div class="header-sub">Auditor de Saídas · Regime Substituição Tributária</div>
+    </div>
+    <div class="header-meta">
+      Banco de NCMs: <strong id="db-count">0</strong> entradas<br>
+      Atualizado: <strong>11/2026</strong>
+    </div>
+  </header>
+
+  <!-- Consulta NCM avulsa -->
+  <div class="consult-card">
+    <div class="consult-row">
+      <label for="consult-input" class="consult-label">Consultar NCM</label>
+      <input id="consult-input" class="ncm-input consult-input" inputmode="numeric" placeholder="ex: 1905.31.00" maxlength="12">
+      <button class="btn-secondary" id="consult-btn">Consultar</button>
+    </div>
+    <div id="consult-result" class="consult-result" hidden></div>
+  </div>
+
+  <!-- Upload -->
+  <div class="upload-card" id="drop-zone">
+    <div class="upload-icon">📂</div>
+    <div class="upload-label">Arraste a planilha ou clique para selecionar</div>
+    <div class="upload-hint">Arquivo .xlsx com as colunas NCM, DESCRIÇÃO, CFOP, CST, BASE DE CÁLCULO, ALIQ (ICMS e VALOR DO ITEM são opcionais)<br>
+    As colunas BASE CORRETA, ALIQ CORRETA, ICMS CORRETO, OBSERVAÇÃO e STATUS são criadas automaticamente</div>
+    <button class="btn-upload" onclick="document.getElementById('file-input').click()">Selecionar arquivo</button>
+    <input type="file" id="file-input" accept=".xlsx,.xls">
+    <label class="api-toggle"><input type="checkbox" id="api-toggle" checked> Validar NCMs na tabela oficial local (Siscomex)</label>
+  </div>
+
+  <!-- Progress (hidden until processing) -->
+  <div id="progress-section" hidden>
+    <div class="progress-bar-wrap"><div class="progress-bar" id="pbar" style="width:0%"></div></div>
+    <div class="status-msg" id="status-msg">Processando…</div>
+  </div>
+
+  <!-- Results (hidden until done) -->
+  <div id="results-section" hidden>
+
+    <div class="tiles">
+      <div class="tile t-total"><div class="tile-num" id="t-total">0</div><div class="tile-label">Linhas totais</div></div>
+      <div class="tile t-ok"><div class="tile-num" id="t-classified">0</div><div class="tile-label">Classificadas</div></div>
+      <div class="tile t-review"><div class="tile-num" id="t-st">0</div><div class="tile-label">Isentas / ST</div></div>
+      <div class="tile t-warn"><div class="tile-num" id="t-div">0</div><div class="tile-label">Divergentes</div><div class="tile-sub" id="t-dif"></div></div>
+      <div class="tile t-rev"><div class="tile-num" id="t-rev">0</div><div class="tile-label">Revisar (CST/CFOP)</div></div>
+      <div class="tile t-inv"><div class="tile-num" id="t-inv">0</div><div class="tile-label">NCM inválido / atenção</div></div>
+      <div class="tile t-sus"><div class="tile-num" id="t-sus">0</div><div class="tile-label">NCM suspeito (descrição)</div><div class="tile-sub" id="t-sus-sub"></div></div>
+      <div class="tile t-new"><div class="tile-num" id="t-new">0</div><div class="tile-label">NCMs novos</div></div>
+    </div>
+
+    <div class="api-status" id="api-status"></div>
+    <div class="parse-notes" id="parse-notes" hidden></div>
+
+    <div class="table-wrap" id="ncm-review-wrap" hidden>
+      <div class="table-head">
+        <span class="table-head-title">Revisão de NCM por produto</span>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <span class="badge badge-amber" id="ncm-review-badge">0 produtos</span>
+          <button class="btn-add" id="btn-review-all" style="background:var(--accent)">Salvar todas as sugestões</button>
+        </div>
+      </div>
+      <p class="ncm-review-help">Produtos com mais de um NCM na planilha ou com NCM que não combina com a descrição. Os que mudam o ICMS aparecem primeiro.
+        Confira e salve o NCM correto: a planilha é reclassificada com ele e o código original fica na coluna “NCM INFORMADO”.
+        Para manter um NCM que o sistema achou suspeito, deixe o código atual no campo e salve. As decisões ficam gravadas neste navegador.</p>
+      <div class="tbl-scroll">
+        <table class="tbl">
+          <thead><tr><th>Código</th><th>Descrição / motivo</th><th>NCMs informados (ocorrências) · tratamento</th><th>ICMS hoje → com o NCM sugerido</th><th>NCM correto</th><th>Ação</th></tr></thead>
+          <tbody id="ncm-review-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="btn-primary" id="btn-download">⬇ Baixar planilha classificada</button>
+      <button class="btn-secondary" id="btn-reset">Classificar outra planilha</button>
+      <span class="actions-note" id="actions-note"></span>
+    </div>
+
+    <!-- New NCMs table -->
+    <div class="table-wrap" id="new-ncms-wrap" hidden>
+      <div class="table-head">
+        <span class="table-head-title">NCMs não encontrados no banco</span>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <span class="badge badge-amber" id="new-badge">0 NCMs</span>
+          <span class="custom-count" id="custom-count" hidden>+ <span id="custom-added">0</span> adicionados</span>
+          <button class="btn-add" id="btn-reclassify" hidden style="background:var(--accent)">↻ Reclassificar</button>
+        </div>
+      </div>
+      <div class="tbl-scroll">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th>NCM</th>
+              <th>Produto (1ª ocorrência) / Descrição oficial</th>
+              <th style="text-align:right">Qtd</th>
+              <th>ALIQ (%)</th>
+              <th>CST</th>
+              <th>Observação</th>
+              <th>Ação</th>
+            </tr>
+          </thead>
+          <tbody id="new-ncms-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+
+<script src="assets/js/database.js"></script>
+<script src="assets/js/ncm-rules.js"></script>
+<script src="assets/js/classification.js"></script>
+<script src="assets/js/ncm-normalizer.js"></script>
+<script src="assets/js/ncm-data.js"></script>
+<script src="assets/js/ncm-api.js"></script>
+<script src="assets/js/app.js"></script>
+</body>
+</html>
