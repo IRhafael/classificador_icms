@@ -52,10 +52,24 @@
       <label for="sefaz-pfx" class="consult-label">Certificado A1 (.pfx/.p12)</label>
       <input id="sefaz-pfx" type="file" accept=".pfx,.p12,application/x-pkcs12">
       <input id="sefaz-password" class="ncm-input consult-input" type="password" autocomplete="new-password" placeholder="Senha do certificado">
-      <input id="sefaz-token" class="ncm-input consult-input" type="password" autocomplete="off" placeholder="Token do conector local">
+      <input id="sefaz-token" class="ncm-input consult-input" type="password" autocomplete="off" placeholder="Token do terminal (não é token SEFAZ)">
       <button class="btn-secondary" id="sefaz-connect" type="button">Conectar</button>
       <span id="sefaz-status" class="cr-muted">Conector local desconectado</span>
     </div>
+    <details class="gtin-attribution" style="margin-top:10px">
+      <summary><strong>Como conectar a SEFAZ neste computador</strong></summary>
+      <ol>
+        <li>Instale o Node.js 18 ou superior e baixe o ZIP do repositório do sistema pelo botão <strong>Code → Download ZIP</strong> no GitHub. Extraia a pasta completa; não basta salvar só o HTML.</li>
+        <li>Abra o PowerShell dentro da pasta extraída e inicie o conector com a origem deste site:
+          <pre><code>$env:SEFAZ_ALLOWED_ORIGINS = 'https://irhafael.github.io'
+node .\sefaz-bridge\server.mjs</code></pre>
+        </li>
+        <li>Na primeira execução, aguarde o conector baixar/verificar a cadeia ICP-Brasil. Deixe o PowerShell aberto e copie o valor impresso após <code>Token desta execução:</code>.</li>
+        <li>Cole esse token no campo acima, escolha seu certificado A1 (.pfx/.p12), informe a senha e clique <strong>Conectar</strong>. O certificado precisa pertencer a contribuinte emitente de NF-e/NFC-e.</li>
+        <li>Marque <strong>Consultar na SEFAZ pelo certificado</strong> para pesquisar. Cada pessoa que usar o site precisa iniciar o próprio conector e usar seu próprio certificado.</li>
+      </ol>
+      <p><strong>O token não vem da SEFAZ:</strong> o conector cria um código local ao iniciar para proteger a comunicação entre esta página e o programa no seu computador. Ele muda quando o conector reinicia. A SEFAZ autentica a consulta pelo certificado digital.</p>
+    </details>
     <div class="gtin-attribution">SEFAZ: consulta oficial do CCG (só GTINs brasileiros 789/790), exige o conector local rodando e certificado A1 de emitente de NF-e/NFC-e — o certificado fica só na memória do conector. Ordem de consulta: base própria → SEFAZ → PreçoMelhor. Só a base própria (XML de entrada) e a SEFAZ trocam o NCM; o PreçoMelhor aparece apenas como referência. Respostas ficam guardadas por 30 dias.</div>
     <div id="gtin-msg" class="consult-result" hidden></div>
   </div>

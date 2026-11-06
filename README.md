@@ -56,6 +56,23 @@ A SEFAZ exige certificado ICP-Brasil A1 de contribuinte emitente de NF-e/NFC-e, 
 
 4. O conector imprime um token no terminal. Cole-o na tela do classificador, selecione o certificado `.pfx`/`.p12`, informe a senha e clique **Conectar**. A opção **Consultar na SEFAZ pelo certificado** é marcada automaticamente.
 
+### Configuração para cada pessoa que usar o site
+
+O GitHub Pages hospeda somente a interface. Cada usuário que quiser consultar a SEFAZ precisa, no próprio computador:
+
+1. Baixar o ZIP do repositório pelo botão **Code → Download ZIP** e extrair a pasta completa (incluindo `sefaz-bridge/`). Instalar Node.js 18 ou superior.
+2. Abrir PowerShell na pasta extraída e iniciar o conector:
+
+   ```powershell
+   $env:SEFAZ_ALLOWED_ORIGINS = 'https://irhafael.github.io'
+   node .\sefaz-bridge\server.mjs
+   ```
+
+3. Aguardar a verificação/instalação automática da cadeia ICP-Brasil e manter o terminal aberto. Copiar o valor impresso após `Token desta execução:`.
+4. No site publicado, colar o token, carregar o próprio certificado `.pfx`/`.p12`, digitar a senha e clicar **Conectar**. Marcar **Consultar na SEFAZ pelo certificado** para fazer consultas.
+
+O token é gerado pelo conector local para proteger a conexão com o navegador; **não é um token fornecido pela SEFAZ**. A SEFAZ autentica a consulta pelo certificado A1 do contribuinte emitente de NF-e/NFC-e. O token muda ao reiniciar o conector. Cada usuário deve usar o próprio certificado e não compartilhar token, certificado ou senha. Se o conector for encerrado, a pessoa precisa iniciá-lo e conectar novamente.
+
 O certificado e a senha ficam somente na memória do processo local e são apagados ao encerrá-lo com Ctrl+C. O conector escuta apenas em `127.0.0.1`; não exponha a porta 8787 nem compartilhe o token. Para usar um token fixo:
 
 ```powershell
