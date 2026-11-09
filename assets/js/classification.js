@@ -289,6 +289,7 @@ const COL_RULES = [
   ['GTIN',     h => /GTIN|\bEAN\b|\bCEAN\b|COD(IGO)?\.?\s*(DE\s+)?BARRAS?\b|^BARRAS$/.test(h) && !/TRIB/.test(h)],
   ['NCM',      h => /\bNCM\b/.test(h)],
   ['CFOP',     h => /\bCFOP\b/.test(h)],
+  ['CEST',     h => /^CEST$|\bCEST\b/.test(h)],
   ['CST',      h => /\bCST\b|\bCSOSN\b|SIT.*TRIB/.test(h) && !/PIS|COFINS|IPI|\bIBS\b|\bCBS\b/.test(h)],
   ['ALIQ',     h => /AL[I]Q/.test(h) && !NAO_ICMS_PROPRIO.test(h)],
   ['BASE',     h => (/BASE.*(CAL|ICMS|TRIB)|^BASE$|^BC\b|VALOR.?BASE|VL.?BC/.test(h)) && !NAO_ICMS_PROPRIO.test(h)],

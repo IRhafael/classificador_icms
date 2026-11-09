@@ -36,6 +36,7 @@ for (const [id, key] of [['gtin-toggle', 'gtin_on'], ['gtin-free-toggle', 'gtin_
 // ── Upload / Drag ───────────────────────────────────────────────────
 const dropZone = $('drop-zone');
 const fileInput = $('file-input');
+const resultFileInput = $('result-file-input');
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
 dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
 dropZone.addEventListener('drop', e => {
@@ -46,6 +47,12 @@ dropZone.addEventListener('drop', e => {
   else alert('Selecione uma planilha .xlsx, .xls ou .csv');
 });
 fileInput.addEventListener('change', () => { if (fileInput.files[0]) processFile(fileInput.files[0]); });
+$('result-file-btn').addEventListener('click', () => resultFileInput.click());
+resultFileInput.addEventListener('change', () => {
+  const file = resultFileInput.files[0];
+  resultFileInput.value = '';
+  if (file) processResultFile(file);
+});
 $('btn-reset').addEventListener('click', () => {
   $('results-section').hidden = true;
   $('progress-section').hidden = true;
@@ -112,6 +119,57 @@ function processFile(file) {
   reader.readAsArrayBuffer(file);
 }
 
+// Reaplica NCMs completos da coluna de sugestão de uma planilha já classificada.
+// Essa via não consulta a tabela oficial nem a base GTIN; os cálculos locais são refeitos.
+function processResultFile(file) {
+  dropZone.hidden = true;
+  $('progress-section').hidden = false;
+  $('results-section').hidden = true;
+  setProgress(10, 'Lendo planilha de resultado…');
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+      const sheetName = wb.SheetNames.includes('Itens') ? 'Itens' : wb.SheetNames[0];
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: null });
+      const headerIndex = findHeader(rows);
+      if (headerIndex < 0) throw new Error('Não encontrei a coluna NCM na planilha.');
+      const C = columnsOf(rows, headerIndex);
+      if (C.NCM == null || C.NCM_SUG == null) throw new Error('A planilha precisa ter as colunas NCM e NCM SUGERIDO.');
+
+      let originalIndex = C.NCM_ORIG;
+      let aplicados = 0;
+      for (let i = headerIndex + 1; i < rows.length; i++) {
+        const row = rows[i];
+        if (!row) continue;
+        const raw = String(row[C.NCM_SUG] == null ? '' : row[C.NCM_SUG]).trim();
+        const digits = raw.replace(/\D/g, '');
+        if (digits.length < 7 || digits.length > 8) continue;
+        const suggestion = digits.padStart(8, '0');
+        const current = String(row[C.NCM] == null ? '' : row[C.NCM]).replace(/\D/g, '').padStart(8, '0');
+        if (suggestion === current) continue;
+        if (originalIndex == null) {
+          originalIndex = rows[headerIndex].length;
+          rows[headerIndex][originalIndex] = 'NCM INFORMADO';
+          for (let j = headerIndex + 1; j < rows.length; j++) if (rows[j]) rows[j][originalIndex] = '';
+        }
+        if (!row[originalIndex]) row[originalIndex] = row[C.NCM];
+        row[C.NCM] = suggestion;
+        aplicados++;
+      }
+
+      lastInput = { rows, sheetName, fileName: file.name, ncmInfo: new Map(), gtinInfo: null, appliedResult: true };
+      runClassification();
+      $('actions-note').textContent = `${aplicados} NCM(s) sugerido(s) aplicado(s); resultados recalculados localmente, sem consultas externas.`;
+      setProgress(100, 'Planilha de resultado aplicada!');
+      setTimeout(() => { $('progress-section').hidden = true; $('results-section').hidden = false; }, 300);
+    } catch (err) {
+      fail('Erro ao aplicar a planilha de resultado: ' + err.message, err);
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
 function ncmCodesOf(rows) {
   const out = new Set(), h = findHeader(rows);
   if (h < 0) { for (const r of rows) for (const v of (r || [])) if (/^\d{7,8}$/.test(String(v || '').trim())) out.add(pad8(v)); return out; }
@@ -140,7 +198,7 @@ function prepareRows() {
   };
   const review = NcmNormalizer.analyze(g.rows, { check: checkNcmCoherence, gtinNcm, gtinProduct });
   const isConfirmed = (cod, desc, ncm, gtin) => NcmNormalizer.isConfirmed(cod, desc, ncm, gtin, gtinProduct);
-  return { gtinRows: g.rows, finalRows: NcmNormalizer.apply(g.rows, { gtinProduct }), shared: g.shared, review, isConfirmed };
+  return { gtinRows: g.rows, finalRows: lastInput.appliedResult ? g.rows : NcmNormalizer.apply(g.rows, { gtinProduct }), shared: g.shared, review, isConfirmed };
 }
 
 function runClassification() {
@@ -150,7 +208,7 @@ function runClassification() {
   const review = prep.review.map(p => Object.assign(p, { impacto: reviewImpact(p) }));
   setProgress(85, 'Gerando arquivo…');
   resultWorkbook = buildWorkbook(res, sheetName, review);
-  resultFileName = fileName.replace(/\.(xlsx|xls|csv)$/i, '') + ' - classificado.xlsx';
+  resultFileName = fileName.replace(/\.(xlsx|xls|csv)$/i, '') + (lastInput.appliedResult ? ' - reclassificado.xlsx' : ' - classificado.xlsx');
   renderResults(res, ncmInfo);
   renderNcmReview(review);
   setProgress(100, 'Concluído!');
@@ -258,25 +316,29 @@ $('btn-review-all').addEventListener('click', () => {
 function buildWorkbook(res, sheetName, review) {
   const wb = XLSX.utils.book_new();
   const C = res.cols;
-  const widths = res.rows[0].map((h, i) => {
-    if (i === C.NCM_DESC) return { wch: 60 };
-    if (i === C.OBS) return { wch: 55 };
-    if (i === C.STATUS) return { wch: 70 };
-    if (i === C.DESC) return { wch: 40 };
-    if (i === C.NCM_SUG || i === C.NCM_ORIG || i === C.NCM_GTIN || i === C.GTIN) return { wch: 15 };
-    if (i === C.NCM_FONTE) return { wch: 30 };
+  // Planilha de retorno enxuta: dados usados na conferência e resultados
+  // calculados pela classificação. Colunas opcionais ausentes são ignoradas.
+  const returnRoles = ['COD', 'GTIN', 'DESC', 'NCM', 'NCM_ORIG', 'CEST', 'CFOP', 'VALOR', 'BASE', 'ALIQ',
+    'NCM_GTIN', 'NCM_SUG', 'VITEM_C', 'BASE_C', 'ALIQ_C', 'ICMS_C', 'DIF'];
+  const returnIndexes = [...new Set(returnRoles.map(role => C[role]).filter(i => i != null))];
+  const returnRows = rows => rows.map(row => returnIndexes.map(i => row[i] == null ? '' : row[i]));
+  const returnHeaders = returnRows([res.rows[0]])[0];
+  const widths = returnHeaders.map((h, i) => {
+    const sourceIndex = returnIndexes[i];
+    if (sourceIndex === C.DESC) return { wch: 40 };
+    if ([C.NCM, C.NCM_ORIG, C.CEST, C.NCM_SUG, C.NCM_GTIN, C.GTIN].includes(sourceIndex)) return { wch: 15 };
     return { wch: Math.max(10, String(h || '').length + 2) };
   });
-  const ws = XLSX.utils.aoa_to_sheet(res.rows);
+  const ws = XLSX.utils.aoa_to_sheet([returnHeaders, ...returnRows(res.rows.slice(1))]);
   ws['!cols'] = widths;
-  ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: res.rows.length - 1, c: res.rows[0].length - 1 } }) };
+  ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: res.rows.length - 1, c: returnHeaders.length - 1 } }) };
   XLSX.utils.book_append_sheet(wb, ws, (sheetName || 'Planilha1').slice(0, 31));
 
   const probl = res.rows.filter((r, i) => i > 0 && !/^✅/.test(String(r[C.STATUS] || '')));
   probl.sort((a, b) => Math.abs(num(b[C.DIF])) - Math.abs(num(a[C.DIF])));
-  const ws2 = XLSX.utils.aoa_to_sheet([res.rows[0], ...probl]);
+  const ws2 = XLSX.utils.aoa_to_sheet([returnHeaders, ...returnRows(probl)]);
   ws2['!cols'] = widths;
-  if (probl.length) ws2['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: probl.length, c: res.rows[0].length - 1 } }) };
+  if (probl.length) ws2['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: probl.length, c: returnHeaders.length - 1 } }) };
   XLSX.utils.book_append_sheet(wb, ws2, 'Divergências');
 
   if (review && review.length) {

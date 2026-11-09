@@ -83,6 +83,9 @@ node .\sefaz-bridge\server.mjs</code></pre>
     As colunas VALOR DO ITEM (CALC.), BASE CORRETA, ALIQ CORRETA, ICMS CORRETO, OBSERVAÇÃO e STATUS são criadas automaticamente</div>
     <button class="btn-upload" onclick="document.getElementById('file-input').click()">Selecionar arquivo</button>
     <input type="file" id="file-input" accept=".xlsx,.xls,.csv">
+    <button class="btn-secondary" id="result-file-btn" type="button">Aplicar planilha de resultado</button>
+    <input type="file" id="result-file-input" accept=".xlsx,.xls,.csv" hidden>
+    <div class="upload-hint" style="margin-top:8px">Recalcula usando os NCMs da coluna “NCM”. Se “NCM SUGERIDO” tiver um NCM completo, aplica a sugestão antes. Sem consultas externas.</div>
     <label class="api-toggle"><input type="checkbox" id="gtin-toggle" checked> Validar o NCM pelo GTIN primeiro (sem GTIN na base, usa o NCM informado)</label>
     <label class="api-toggle"><input type="checkbox" id="api-toggle" checked> Validar NCMs na tabela oficial (Siscomex, consulta local)</label>
   </div>
