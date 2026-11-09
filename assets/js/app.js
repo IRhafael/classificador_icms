@@ -323,7 +323,7 @@ function renderResults(res, ncmInfo) {
   const prodDiv = res.rows.filter((r, i) => i > 0 && /^⚠️/.test(String(r[res.cols.STATUS] || ''))).length;
   $('t-dif').textContent = `${fmt(prodDiv)} produto(s)` + (s.difTotal
     ? ' · dif. ' + s.difTotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '');
-  $('t-dif').title = 'Diferença de ICMS = ICMS correto − ICMS declarado (negativo: recolhido a maior; positivo: a menor)';
+  $('t-dif').title = 'Diferença de ICMS a menor = ICMS correto − ICMS declarado; diferenças negativas (recolhimento a maior) não são informadas';
   $('t-rev').textContent = fmt(s.revisar);
   $('t-inv').textContent = fmt(s.ncmInvalido + s.atencao);
   $('t-sus').textContent = fmt(s.ncmSuspeito);

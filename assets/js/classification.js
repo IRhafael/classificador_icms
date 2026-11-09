@@ -670,7 +670,9 @@ function classifyRows(rowsIn, ncmInfo, db, opts) {
     row[C.BASE_C] = a.baseFaltando ? '' : a.base;
     row[C.ALIQ_C] = a.aliq;
     row[C.ICMS_C] = a.baseFaltando ? '' : a.icms;
-    row[C.DIF] = a.dif == null ? '' : a.dif;
+    // Diferença negativa indica ICMS recolhido a maior; não informar esse valor
+    // na planilha de diferenças (o campo destaca apenas recolhimento a menor).
+    row[C.DIF] = a.dif == null || a.dif <= 0 ? '' : a.dif;
     const obs = [rule.obs || ''];
     if (rule.atencao && !/ATENÇÃO/.test(rule.obs || '')) obs.push('ATENÇÃO: ' + rule.atencao);
     if (a.simples) obs.push('Simples Nacional (CSOSN) — ICMS no DAS; conferido só o enquadramento ST/isento/tributado');
@@ -704,7 +706,7 @@ function classifyRows(rowsIn, ncmInfo, db, opts) {
     if (coh && !/^🟡 NCM SUSPEITO/.test(status)) status += ' | 🟡 NCM suspeito';
     if (ncmProblema) { stats.ncmInvalido++; if (!/^❌/.test(status)) status += ' | ❌ ' + ncmProblema; }
     row[C.STATUS] = status;
-    if (a.dif != null && a.erros.length) stats.difTotal = r2(stats.difTotal + a.dif);
+    if (a.dif > 0 && a.erros.length) stats.difTotal = r2(stats.difTotal + a.dif);
   }
 
   // ── Consolidação ─────────────────────────────────────────────────

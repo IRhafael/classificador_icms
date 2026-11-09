@@ -38,6 +38,8 @@ sefaz-bridge/server.mjs          conector local para a consulta GTIN da SEFAZ
 
 A SEFAZ exige certificado ICP-Brasil A1 de contribuinte emitente de NF-e/NFC-e, TLS mútuo e SOAP (NT 2022.001). Uma página estática não consegue apresentar o certificado ao Web Service; por isso, a consulta passa pelo conector local em `sefaz-bridge/server.mjs`.
 
+node .\sefaz-bridge\server.mjs # AQUI O COMANDO PARA RODAR NO TERMINAL
+
 1. Instale Node.js 18 ou superior.
 2. Abra o PowerShell na pasta do projeto e informe de onde a página será aberta:
 
