@@ -39,7 +39,7 @@ sefaz-bridge/server.mjs          conector local para a consulta GTIN da SEFAZ
 A SEFAZ exige certificado ICP-Brasil A1 de contribuinte emitente de NF-e/NFC-e, TLS mútuo e SOAP (NT 2022.001). Uma página estática não consegue apresentar o certificado ao Web Service; por isso, a consulta passa pelo conector local em `sefaz-bridge/server.mjs`.
 
 1. Instale Node.js 18 ou superior.
-2. Abra o PowerShell na pasta do projeto e informe de onde a página será aberta:
+2. Abra a pasta extraída no Explorador de Arquivos. A pasta correta contém `sefaz-bridge`. Clique na barra de endereço do Explorador, digite `powershell` e pressione Enter. Confira se o prompt mostra essa pasta (e não `C:\Windows\System32`). Alternativamente, no PowerShell, entre nela com `Set-Location "C:\caminho\para\pasta-extraida"`. Informe então de onde a página será aberta:
 
    ```powershell
    # Site publicado: só esquema + domínio, sem o caminho do repositório
@@ -61,7 +61,7 @@ A SEFAZ exige certificado ICP-Brasil A1 de contribuinte emitente de NF-e/NFC-e, 
 O GitHub Pages hospeda somente a interface. Cada usuário que quiser consultar a SEFAZ precisa, no próprio computador:
 
 1. Baixar o ZIP do repositório pelo botão **Code → Download ZIP** e extrair a pasta completa (incluindo `sefaz-bridge/`). Instalar Node.js 18 ou superior.
-2. Abrir PowerShell na pasta extraída e iniciar o conector:
+2. Abrir a pasta extraída no Explorador de Arquivos. A pasta correta contém `sefaz-bridge`. Clique na barra de endereço, digite `powershell` e pressione Enter; confira que o prompt não começa em `C:\Windows\System32`. Depois, iniciar o conector:
 
    ```powershell
    $env:SEFAZ_ALLOWED_ORIGINS = 'https://irhafael.github.io'

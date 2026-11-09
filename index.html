@@ -60,7 +60,7 @@
       <summary><strong>Como conectar a SEFAZ neste computador</strong></summary>
       <ol>
         <li>Instale o Node.js 18 ou superior e baixe o ZIP do repositório do sistema pelo botão <strong>Code → Download ZIP</strong> no GitHub. Extraia a pasta completa; não basta salvar só o HTML.</li>
-        <li>Abra o PowerShell dentro da pasta extraída e inicie o conector com a origem deste site:
+        <li>Abra no Explorador de Arquivos a pasta extraída que contém <code>sefaz-bridge</code>. Clique na barra de endereço, digite <code>powershell</code> e pressione Enter. Confirme que o prompt mostra essa pasta (não <code>C:\Windows\System32</code>) e inicie o conector:
           <pre><code>$env:SEFAZ_ALLOWED_ORIGINS = 'https://irhafael.github.io'
 node .\sefaz-bridge\server.mjs</code></pre>
         </li>
